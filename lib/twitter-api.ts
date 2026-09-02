@@ -6,6 +6,7 @@
  */
 import { importParsedBookmarks } from '@/lib/import-bookmarks'
 import { tweetResultToParsed, unwrapTweet, type TweetResult } from '@/lib/tweet-normalize'
+import { getXQueryIds, TIMELINE_FEATURES, addMissingFeatures } from '@/lib/x-query-ids'
 
 export type { TweetResult } from '@/lib/tweet-normalize'
 export { tweetFullText, extractMedia } from '@/lib/tweet-normalize'
@@ -15,44 +16,18 @@ export { tweetFullText, extractMedia } from '@/lib/tweet-normalize'
 const BEARER =
   'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA'
 
-const FEATURES = JSON.stringify({
-  graphql_timeline_v2_bookmark_timeline: true,
-  responsive_web_graphql_exclude_directive_enabled: true,
-  verified_phone_label_enabled: false,
-  creator_subscriptions_tweet_preview_api_enabled: true,
-  responsive_web_graphql_timeline_navigation_enabled: true,
-  responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
-  tweetypie_unmention_optimization_enabled: true,
-  responsive_web_edit_tweet_api_enabled: true,
-  graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
-  view_counts_everywhere_api_enabled: true,
-  longform_notetweets_consumption_enabled: true,
-  responsive_web_twitter_article_tweet_consumption_enabled: true,
-  tweet_awards_web_tipping_enabled: false,
-  freedom_of_speech_not_reach_fetch_enabled: true,
-  standardized_nudges_misinfo: true,
-  tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: true,
-  longform_notetweets_rich_text_read_enabled: true,
-  longform_notetweets_inline_media_enabled: true,
-  responsive_web_enhance_cards_enabled: false,
-})
-
-// Query ID for X's internal Bookmarks GraphQL endpoint.
-// It changes when X deploys — update if you get 400/404 errors. Override with X_BOOKMARKS_QUERY_ID.
-const QUERY_ID = process.env.X_BOOKMARKS_QUERY_ID ?? 'xLjCVTqYWz8CGSprLU349w'
-
 // ── Fetch + Parse ─────────────────────────────────────────────────────────────
 
-export async function fetchPage(authToken: string, ct0: string, cursor?: string) {
+const features: Record<string, boolean> = { ...TIMELINE_FEATURES }
+
+async function fetchOnce(authToken: string, ct0: string, queryId: string, cursor?: string): Promise<Response> {
   const variables = JSON.stringify({
     count: 100,
     includePromotedContent: false,
     ...(cursor ? { cursor } : {}),
   })
-
-  const url = `https://x.com/i/api/graphql/${QUERY_ID}/Bookmarks?variables=${encodeURIComponent(variables)}&features=${encodeURIComponent(FEATURES)}`
-
-  const res = await fetch(url, {
+  const url = `https://x.com/i/api/graphql/${queryId}/Bookmarks?variables=${encodeURIComponent(variables)}&features=${encodeURIComponent(JSON.stringify(features))}`
+  return fetch(url, {
     headers: {
       Authorization: `Bearer ${BEARER}`,
       'X-Csrf-Token': ct0,
@@ -64,20 +39,41 @@ export async function fetchPage(authToken: string, ct0: string, cursor?: string)
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       Accept: '*/*',
       'Accept-Language': 'en-US,en;q=0.9',
-      Referer: 'https://x.com/i/bookmarks',
+      Referer: 'https://x.com/i/history',
     },
   })
+}
 
-  if (!res.ok) {
+/**
+ * Fetch one page of bookmarks. Query IDs are discovered from X's public
+ * bundles and refreshed automatically when X rotates them; newly required
+ * feature flags are picked up from X's own 400 error and retried.
+ */
+export async function fetchPage(authToken: string, ct0: string, cursor?: string) {
+  let ids = await getXQueryIds()
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetchOnce(authToken, ct0, ids.bookmarks, cursor)
     const text = await res.text()
-    throw new Error(`Twitter API ${res.status}: ${text.slice(0, 300)}`)
-  }
 
-  try {
-    return await res.json()
-  } catch {
-    throw new Error('Twitter returned an invalid response (not JSON)')
+    if (res.status === 400 && addMissingFeatures(text, features).length > 0) continue
+    if ((res.status === 404 || res.status === 400) && attempt === 0) {
+      // Likely a rotated query ID — rediscover once
+      ids = await getXQueryIds(true)
+      continue
+    }
+    if (res.status === 429) {
+      await new Promise((r) => setTimeout(r, 60_000))
+      continue
+    }
+    if (!res.ok) throw new Error(`Twitter API ${res.status}: ${text.slice(0, 300)}`)
+
+    try {
+      return JSON.parse(text)
+    } catch {
+      throw new Error('Twitter returned an invalid response (not JSON)')
+    }
   }
+  throw new Error('Twitter API: gave up after repeated errors')
 }
 
 /** Walk timeline instructions and pull out tweets + the bottom cursor. */

@@ -36,13 +36,20 @@ npx tsx cli/siftly.ts index --status
 3. `GET /api/search` returns that instantly. `POST /api/search/ai` takes the top 40 hybrid hits and asks the configured model to rerank + explain.
 4. Indexing: `lib/import-bookmarks.ts` upserts FTS rows and schedules embeddings for new posts; the categorize pipeline ends with an `index` stage (`rebuildFts` + `embedBookmarks`); `POST /api/search/index` rebuilds on demand. Vectors are re-computed only when the document hash changes.
 
+## How import works
+
+- `lib/x-query-ids.ts` fetches x.com HTML + the History/Bookmarks JS chunks from abs.twimg.com (public, no login) and regexes `queryId:"…",operationName:"Bookmarks"|"Likes"`. Cached in Setting `x_query_ids` for 24h; `getXQueryIds(true)` forces refresh. Fallback constants in the same file.
+- `lib/x-direct-import-script.ts` builds the bookmarklet/console script. It runs on x.com, calls the Bookmarks/Likes GraphQL endpoint with `count:100` + cursor, and sends batches to a sortX window via `postMessage` (X's CSP `connect-src` forbids fetch to other origins). The receiver is the Import page (`window.opener` when X was opened from sortX, else `window.open(origin/import)`), which forwards to `POST /api/import/bookmarklet`. Fallback: download JSON `{tweets:[raw GraphQL]}`, accepted by `lib/parser.ts`.
+- `GET /api/import/bookmarklet` reports progress of the current run (in-memory); the Import page polls it.
+- Test harness caveat: background Chrome tabs freeze timers/fetch, and a CDP-evaluated `window.open` has no user gesture. Test the script in a foreground tab and let a real click open windows.
+
 ## Project Structure
 
 ```
 app/
   search/               unified search page (replaces /ai-search, which redirects)
   api/search/           route.ts (hybrid), ai/route.ts (rerank), index/route.ts (vectors)
-  api/import/           route.ts (JSON), bookmarklet/, twitter/ (cookie), live/ (scheduled), x-oauth/
+  api/import/           route.ts (JSON), bookmarklet/ (direct-import receiver + progress), x-ids/, twitter/ (cookie), live/ (scheduled), x-oauth/
   api/categorize/       pipeline: entities → parallel(vision, tags, categorize) → index
   api/bookmarks/        list/filter (q, author, category, mediaType, source, sort=newest|oldest|popular)
   import/ bookmarks/ categories/ categorize/ mindmap/ settings/ page.tsx

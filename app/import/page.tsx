@@ -4,9 +4,10 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import Link from 'next/link'
 import { Upload, CheckCircle, ChevronRight, Loader2, Copy, Check, ExternalLink, Sparkles, Eye, Tag, Brain, Layers, StopCircle, RefreshCw, Clock, KeyRound, Trash2, AlertCircle, User, LogOut, Database } from 'lucide-react'
 import * as Progress from '@radix-ui/react-progress'
+import { buildDirectImportScript, toBookmarkletHref } from '@/lib/x-direct-import-script'
 
 type Step = 1 | 2 | 3
-type Method = 'bookmarklet' | 'console' | 'live'
+type Method = 'direct' | 'file' | 'live'
 
 interface ImportResult {
   imported: number
@@ -68,319 +69,18 @@ const STAGE_INFO: Record<NonNullable<Stage>, { label: string; icon: React.ReactN
   },
 }
 
-// ── Bookmarklet script (captures Twitter/X bookmark API responses as you scroll) ──
-
-const BOOKMARKLET_SCRIPT = `(async function(){
-  if(!location.hostname.includes('twitter.com')&&!location.hostname.includes('x.com')){
-    showToast('\u274c Please navigate to x.com/i/bookmarks or x.com/username/likes first','#ef4444');return;
-  }
-  var isLikes=location.pathname.includes('/likes');
-  var source=isLikes?'like':'bookmark';
-  var label=isLikes?'likes':'bookmarks';
-  function showToast(msg,bg){
-    var t=document.createElement('div');t.textContent=msg;
-    Object.assign(t.style,{position:'fixed',bottom:'24px',left:'50%',transform:'translateX(-50%)',
-      zIndex:'2147483647',padding:'10px 18px',background:bg||'#1e1b4b',color:'#fff',
-      border:'1px solid rgba(255,255,255,0.15)',borderRadius:'8px',
-      fontSize:'13px',fontWeight:'600',fontFamily:'system-ui,sans-serif',
-      boxShadow:'0 4px 20px rgba(0,0,0,0.6)',whiteSpace:'nowrap',transition:'opacity 0.3s'});
-    document.body.appendChild(t);
-    setTimeout(function(){t.style.opacity='0';setTimeout(function(){t.remove();},300);},4000);
-  }
-  var all=[],seen=new Set();
-  var btn=document.createElement('button');
-  btn.textContent='Scroll, then Export 0 '+label+' \u2192';
-  Object.assign(btn.style,{position:'fixed',top:'12px',right:'12px',zIndex:'2147483647',
-    padding:'10px 18px',background:'#4f46e5',color:'#fff',border:'none',borderRadius:'8px',
-    cursor:'pointer',fontSize:'14px',fontWeight:'700',
-    boxShadow:'0 0 0 2px rgba(99,102,241,.4),0 4px 16px rgba(0,0,0,.4)',
-    fontFamily:'system-ui,sans-serif'});
-  function addTweet(t){
-    if(!t||!t.rest_id||seen.has(t.rest_id))return;
-    seen.add(t.rest_id);
-    var leg=t.legacy||{},ures=(t.core&&t.core.user_results&&t.core.user_results.result)||{},usr=ures.legacy||{},ucore=ures.core||{};
-    var noteText=t.note_tweet&&t.note_tweet.note_tweet_results&&t.note_tweet.note_tweet_results.result&&t.note_tweet.note_tweet_results.result.text;
-    var qr=t.quoted_status_result&&t.quoted_status_result.result;if(qr&&qr.tweet)qr=qr.tweet;
-    var quoted;
-    if(qr&&qr.legacy){var qres=(qr.core&&qr.core.user_results&&qr.core.user_results.result)||{};var qnote=qr.note_tweet&&qr.note_tweet.note_tweet_results&&qr.note_tweet.note_tweet_results.result&&qr.note_tweet.note_tweet_results.result.text;
-      quoted={text:qnote||qr.legacy.full_text||'',handle:(qres.legacy&&qres.legacy.screen_name)||(qres.core&&qres.core.screen_name)||''};}
-    var rawMedia=(leg.extended_entities&&leg.extended_entities.media)||(leg.entities&&leg.entities.media)||[];
-    var media=rawMedia.map(function(m){
-      var thumb=m.media_url_https||'';
-      if(m.type==='video'||m.type==='animated_gif'){
-        var variants=m.video_info&&m.video_info.variants||[];
-        var mp4s=variants.filter(function(v){return v.content_type==='video/mp4'&&v.url;}).sort(function(a,b){return(b.bitrate||0)-(a.bitrate||0);});
-        if(mp4s.length)return{type:m.type==='animated_gif'?'gif':'video',url:mp4s[0].url};
-        // No mp4 — degrade to photo so thumbnail shows correctly (actual video not available)
-        if(thumb)return{type:'photo',url:thumb};
-        return null;
-      }
-      return thumb?{type:'photo',url:thumb}:null;
-    }).filter(Boolean);
-    all.push({id:t.rest_id,author:usr.name||ucore.name||'Unknown',handle:'@'+(usr.screen_name||ucore.screen_name||'unknown'),
-      avatar:usr.profile_image_url_https||'',timestamp:leg.created_at||'',
-      text:noteText||leg.full_text||leg.text||'',media:media,
-      likes:leg.favorite_count,retweets:leg.retweet_count,replies:leg.reply_count,views:(t.views&&t.views.count)||undefined,lang:leg.lang,quoted:quoted,
-      hashtags:(leg.entities&&leg.entities.hashtags||[]).map(function(h){return h.text;}),
-      urls:(leg.entities&&leg.entities.urls||[]).map(function(u){return u.expanded_url;}).filter(Boolean)});
-    btn.textContent='Export '+all.length+' '+label+' \u2192';
-  }
-  function isTweetObj(o){return o&&typeof o==='object'&&typeof o.rest_id==='string'&&o.rest_id.length>5&&(o.legacy||o.core);}
-  function unwrapTweet(t){
-    if(!t)return null;
-    if(t.__typename==='TweetWithVisibilityResults'||t.__typename==='TweetWithVisibilityResult')return t.tweet||t;
-    return t;
-  }
-  function deepFindTweets(obj,depth){
-    if(!obj||typeof obj!=='object'||depth>12)return;
-    if(Array.isArray(obj)){obj.forEach(function(item){deepFindTweets(item,depth+1);});return;}
-    if(obj.tweet_results&&obj.tweet_results.result){var tw=unwrapTweet(obj.tweet_results.result);if(tw)addTweet(tw);}
-    else if(isTweetObj(obj)){addTweet(unwrapTweet(obj));}
-    for(var k in obj){if(Object.prototype.hasOwnProperty.call(obj,k)&&k!=='quoted_status_result'){deepFindTweets(obj[k],depth+1);}}
-  }
-  function processData(d){deepFindTweets(d,0);}
-  var autoBtn=document.createElement('button');
-  function doExport(){
-    window.fetch=origFetch;
-    XMLHttpRequest.prototype.open=origOpen;
-    XMLHttpRequest.prototype.send=origSend;
-    if(!all.length){showToast('\u26a0\ufe0f No '+label+' captured \u2014 scroll or use Auto-scroll first!','#92400e');return;}
-    [btn,autoBtn].forEach(function(el){try{document.body.removeChild(el);}catch(e){}});
-    var blob=new Blob([JSON.stringify({bookmarks:all,source:source},null,2)],{type:'application/json'});
-    var url=URL.createObjectURL(blob);
-    var a=document.createElement('a');a.href=url;a.download=source+'s.json';a.click();
-    setTimeout(function(){URL.revokeObjectURL(url);},1000);
-    showToast('\u2705 Downloaded '+all.length+' '+label+'! Upload to sortX.','#14532d');
-  }
-  btn.onclick=doExport;
-  autoBtn.textContent='\u25b6 Auto-scroll';
-  Object.assign(autoBtn.style,{position:'fixed',top:'58px',right:'12px',zIndex:'2147483647',
-    padding:'8px 14px',background:'#18181b',color:'#a1a1aa',
-    border:'1px solid #3f3f46',borderRadius:'8px',
-    cursor:'pointer',fontSize:'12px',fontWeight:'600',fontFamily:'system-ui,sans-serif'});
-  var autoScrolling=false;
-  function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
-  async function runAutoScroll(){
-    var stagnant=0,lastCount=all.length;
-    while(autoScrolling){
-      window.scrollTo(0,document.documentElement.scrollHeight);
-      var col=document.querySelector('[data-testid="primaryColumn"]');
-      if(col)col.scrollTo(0,col.scrollHeight);
-      await sleep(900);
-      if(all.length>lastCount){stagnant=0;lastCount=all.length;}
-      else{
-        stagnant++;
-        if(stagnant>=8){
-          window.scrollTo(0,document.documentElement.scrollHeight);
-          await sleep(2000);
-          if(all.length===lastCount){
-            autoScrolling=false;
-            autoBtn.textContent='\u2705 Done \u2014 '+all.length+' captured';
-            autoBtn.style.background='#14532d';autoBtn.style.color='#86efac';autoBtn.style.border='1px solid #166534';
-            showToast('\u2705 Auto-scroll complete! '+all.length+' '+label+' ready. Click Export.','#14532d');
-            return;
-          }
-          stagnant=0;
-        }
-      }
-    }
-    autoBtn.textContent='\u25b6 Auto-scroll';
-    autoBtn.style.background='#18181b';autoBtn.style.color='#a1a1aa';autoBtn.style.border='1px solid #3f3f46';
-  }
-  autoBtn.onclick=function(){
-    if(autoScrolling){autoScrolling=false;return;}
-    autoScrolling=true;
-    autoBtn.textContent='\u23f8 Stop';
-    autoBtn.style.background='#4f46e5';autoBtn.style.color='#fff';autoBtn.style.border='none';
-    runAutoScroll();
-  };
-  document.body.appendChild(btn);
-  document.body.appendChild(autoBtn);
-  function isApiUrl(u){return u.includes('/graphql/')||u.includes('/i/api/')||u.includes('/2/timeline');}
-  var origFetch=window.fetch;
-  window.fetch=async function(){
-    var r=await origFetch.apply(this,arguments);
-    try{
-      var u=arguments[0] instanceof Request?arguments[0].url:String(arguments[0]);
-      if(isApiUrl(u)){var ct=r.headers.get('content-type')||'';if(ct.includes('json')){var d=await r.clone().json();processData(d);}}
-    }catch(ex){}
-    return r;
-  };
-  var origOpen=XMLHttpRequest.prototype.open,origSend=XMLHttpRequest.prototype.send,xhrUrls=new WeakMap();
-  XMLHttpRequest.prototype.open=function(){xhrUrls.set(this,String(arguments[1]||''));return origOpen.apply(this,arguments);};
-  XMLHttpRequest.prototype.send=function(){
-    var xhr=this,u=xhrUrls.get(xhr)||'';
-    if(isApiUrl(u)){xhr.addEventListener('load',function(){try{processData(JSON.parse(xhr.responseText));}catch(ex){}});}
-    return origSend.apply(this,arguments);
-  };
-  showToast('\u2705 Active! Scroll your '+label+' \u2014 counter updates above.','#1e1b4b');
-})();`
-
-const BOOKMARKLET_HREF = `javascript:${encodeURIComponent(BOOKMARKLET_SCRIPT)}`
-
-const CONSOLE_SCRIPT = `(async function() {
-  if (!location.hostname.includes('twitter.com') && !location.hostname.includes('x.com')) {
-    alert('Run this on x.com/i/bookmarks or x.com/username/likes'); return;
-  }
-  const isLikes = location.pathname.includes('/likes');
-  const source = isLikes ? 'like' : 'bookmark';
-  const label = isLikes ? 'likes' : 'bookmarks';
-  const all = [], seen = new Set();
-  function addTweet(t) {
-    if (!t?.rest_id || seen.has(t.rest_id)) return;
-    seen.add(t.rest_id);
-    const leg = t.legacy ?? {}, ures = t.core?.user_results?.result ?? {}, usr = ures.legacy ?? {}, ucore = ures.core ?? {};
-    const noteText = t.note_tweet?.note_tweet_results?.result?.text;
-    let qr = t.quoted_status_result?.result; if (qr?.tweet) qr = qr.tweet;
-    const quoted = qr?.legacy ? {
-      text: qr.note_tweet?.note_tweet_results?.result?.text ?? qr.legacy.full_text ?? '',
-      handle: qr.core?.user_results?.result?.legacy?.screen_name ?? qr.core?.user_results?.result?.core?.screen_name ?? ''
-    } : undefined;
-    const media = (leg.extended_entities?.media ?? leg.entities?.media ?? []).map(m => {
-      const thumb = m.media_url_https ?? '';
-      if (m.type === 'video' || m.type === 'animated_gif') {
-        const mp4s = (m.video_info?.variants ?? []).filter(v => v.content_type === 'video/mp4' && v.url)
-          .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
-        if (mp4s.length) return { type: m.type === 'animated_gif' ? 'gif' : 'video', url: mp4s[0].url };
-        // No mp4 — degrade to photo so thumbnail shows correctly (actual video not available)
-        return thumb ? { type: 'photo', url: thumb } : null;
-      }
-      return thumb ? { type: 'photo', url: thumb } : null;
-    }).filter(Boolean);
-    all.push({
-      id: t.rest_id, author: usr.name ?? ucore.name ?? 'Unknown', handle: '@' + (usr.screen_name ?? ucore.screen_name ?? 'unknown'),
-      timestamp: leg.created_at ?? '', text: noteText ?? leg.full_text ?? leg.text ?? '', media,
-      likes: leg.favorite_count, retweets: leg.retweet_count, replies: leg.reply_count, views: t.views?.count, lang: leg.lang, quoted,
-      hashtags: (leg.entities?.hashtags ?? []).map(h => h.text),
-      urls: (leg.entities?.urls ?? []).map(u => u.expanded_url).filter(Boolean)
-    });
-    btn.textContent = \`Export \${all.length} \${label} →\`;
-  }
-  function isTweetObj(o) { return o && typeof o === 'object' && typeof o.rest_id === 'string' && o.rest_id.length > 5 && (o.legacy || o.core); }
-  function unwrapTweet(t) {
-    if (!t) return null;
-    if (t.__typename === 'TweetWithVisibilityResults' || t.__typename === 'TweetWithVisibilityResult') return t.tweet ?? t;
-    return t;
-  }
-  function deepFindTweets(obj, depth = 0) {
-    if (!obj || typeof obj !== 'object' || depth > 12) return;
-    if (Array.isArray(obj)) { obj.forEach(item => deepFindTweets(item, depth + 1)); return; }
-    if (obj.tweet_results?.result) { const tw = unwrapTweet(obj.tweet_results.result); if (tw) addTweet(tw); }
-    else if (isTweetObj(obj)) { addTweet(unwrapTweet(obj)); }
-    for (const k of Object.keys(obj)) { if (k !== 'quoted_status_result') deepFindTweets(obj[k], depth + 1); }
-  }
-  function processData(d) { deepFindTweets(d, 0); }
-  const btn = document.createElement('button');
-  btn.textContent = 'Scroll then click to Export →';
-  Object.assign(btn.style, {
-    position: 'fixed', top: '12px', right: '12px', zIndex: '2147483647',
-    padding: '10px 18px', background: '#4f46e5', color: '#fff',
-    border: 'none', borderRadius: '8px', cursor: 'pointer',
-    fontSize: '14px', fontWeight: '700',
-    boxShadow: '0 0 0 2px rgba(99,102,241,.4),0 4px 16px rgba(0,0,0,.4)',
-    fontFamily: 'system-ui,sans-serif'
-  });
-  function doExport() {
-    window.fetch = origFetch;
-    XMLHttpRequest.prototype.open = origOpen;
-    XMLHttpRequest.prototype.send = origSend;
-    [btn, autoBtn].forEach(el => { try { document.body.removeChild(el); } catch(e) {} });
-    if (!all.length) { alert(\`No \${label} captured. Use Auto-scroll or scroll manually first.\`); return; }
-    const blob = new Blob([JSON.stringify({ bookmarks: all, source }, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = \`\${source}s.json\`; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    console.log(\`✅ Downloaded \${all.length} \${label}!\`);
-  }
-  btn.onclick = doExport;
-  const autoBtn = document.createElement('button');
-  autoBtn.textContent = '▶ Auto-scroll';
-  Object.assign(autoBtn.style, {
-    position: 'fixed', top: '58px', right: '12px', zIndex: '2147483647',
-    padding: '8px 14px', background: '#18181b', color: '#a1a1aa',
-    border: '1px solid #3f3f46', borderRadius: '8px', cursor: 'pointer',
-    fontSize: '12px', fontWeight: '600', fontFamily: 'system-ui,sans-serif'
-  });
-  let autoScrolling = false;
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  async function runAutoScroll() {
-    let stagnant = 0, lastCount = all.length;
-    while (autoScrolling) {
-      window.scrollTo(0, document.documentElement.scrollHeight);
-      const col = document.querySelector('[data-testid="primaryColumn"]');
-      col?.scrollTo(0, col.scrollHeight);
-      await sleep(900);
-      if (all.length > lastCount) { stagnant = 0; lastCount = all.length; }
-      else {
-        stagnant++;
-        if (stagnant >= 8) {
-          window.scrollTo(0, document.documentElement.scrollHeight);
-          await sleep(2000);
-          if (all.length === lastCount) {
-            autoScrolling = false;
-            autoBtn.textContent = \`✅ Done — \${all.length} captured\`;
-            autoBtn.style.cssText += ';background:#14532d;color:#86efac;border:1px solid #166534';
-            console.log(\`✅ Auto-scroll complete! \${all.length} \${label} ready. Click Export.\`);
-            return;
-          }
-          stagnant = 0;
-        }
-      }
-    }
-    autoBtn.textContent = '▶ Auto-scroll';
-    autoBtn.style.background = '#18181b'; autoBtn.style.color = '#a1a1aa'; autoBtn.style.border = '1px solid #3f3f46';
-  }
-  autoBtn.onclick = function() {
-    if (autoScrolling) { autoScrolling = false; return; }
-    autoScrolling = true;
-    autoBtn.textContent = '⏸ Stop';
-    autoBtn.style.background = '#4f46e5'; autoBtn.style.color = '#fff'; autoBtn.style.border = 'none';
-    runAutoScroll();
-  };
-  document.body.appendChild(btn);
-  document.body.appendChild(autoBtn);
-  const isApiUrl = (u) => u.includes('/graphql/') || u.includes('/i/api/') || u.includes('/2/timeline');
-  const origFetch = window.fetch;
-  window.fetch = async function(...args) {
-    const r = await origFetch.apply(this, args);
-    try {
-      const u = args[0] instanceof Request ? args[0].url : String(args[0]);
-      if (isApiUrl(u)) { const ct = r.headers.get('content-type') ?? ''; if (ct.includes('json')) { const d = await r.clone().json(); processData(d); } }
-    } catch(e) {}
-    return r;
-  };
-  const origOpen = XMLHttpRequest.prototype.open;
-  const origSend = XMLHttpRequest.prototype.send;
-  const xhrUrls = new WeakMap();
-  XMLHttpRequest.prototype.open = function(...args) {
-    xhrUrls.set(this, String(args[1] ?? ''));
-    return origOpen.apply(this, args);
-  };
-  XMLHttpRequest.prototype.send = function(...args) {
-    const xhr = this, u = xhrUrls.get(xhr) ?? '';
-    if (isApiUrl(u)) {
-      xhr.addEventListener('load', function() {
-        try { processData(JSON.parse(xhr.responseText)); } catch(e) {}
-      });
-    }
-    return origSend.apply(this, args);
-  };
-  console.log(\`✅ Script active. Scroll through your \${label}, then click the purple button.\`);
-})();`
-
 // ── Draggable bookmarklet link ────────────────────────────────────────────────
 // React blocks javascript: URLs set via JSX href as a security precaution.
 // We bypass this by setting the href attribute imperatively after mount so the
 // drag-to-bookmark-bar flow still works correctly in all browsers.
 
-function DraggableBookmarklet() {
+function DraggableBookmarklet({ href, label }: { href: string; label: string }) {
   const linkRef = useRef<HTMLAnchorElement>(null)
 
   useEffect(() => {
     // Set href imperatively — bypasses React's javascript: URL XSS guard
-    linkRef.current?.setAttribute('href', BOOKMARKLET_HREF)
-  }, [])
+    linkRef.current?.setAttribute('href', href)
+  }, [href])
 
   return (
     <a
@@ -390,7 +90,7 @@ function DraggableBookmarklet() {
       className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold cursor-grab active:cursor-grabbing select-none transition-colors"
       title="Drag this to your bookmarks bar — do not click"
     >
-      📥 Export X Bookmarks
+      📥 {label}
     </a>
   )
 }
@@ -474,195 +174,214 @@ function UploadZone({ onFile }: { onFile: (file: File) => void }) {
   )
 }
 
-function BookmarkletTab({ onFile, importSource }: { onFile: (file: File) => void; importSource: 'bookmark' | 'like' }) {
-  const targetUrl = importSource === 'like' ? 'https://x.com' : 'https://x.com/i/bookmarks'
-  const targetLabel = importSource === 'like' ? 'x.com/YourUsername/likes' : 'x.com/i/bookmarks'
-  const sourceLabel = importSource === 'like' ? 'likes' : 'bookmarks'
-  const steps = [
-    {
-      num: 1,
-      title: 'Add the bookmarklet to your bookmark bar',
-      content: (
-        <div className="mt-2 space-y-3">
-          <p className="text-xs text-zinc-500">
-            Show your bookmark bar first: <strong className="text-zinc-300">View → Show Bookmarks Bar</strong>
-          </p>
-          {/* Option A: Drag */}
-          <div className="flex items-center gap-3 p-3 rounded-xl bg-zinc-800/60 border border-zinc-700/50">
-            <div className="shrink-0 w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs font-bold">A</div>
-            <div className="min-w-0">
-              <p className="text-xs font-medium text-zinc-300 mb-1.5">Drag to bookmark bar</p>
-              <DraggableBookmarklet />
-            </div>
-          </div>
-          {/* Option B: Manual (more reliable in Chrome) */}
-          <div className="flex items-start gap-3 p-3 rounded-xl bg-zinc-800/60 border border-zinc-700/50">
-            <div className="shrink-0 w-6 h-6 rounded-full bg-zinc-600/40 text-zinc-400 flex items-center justify-center text-xs font-bold mt-0.5">B</div>
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-zinc-300 mb-1.5">Manual (works in all browsers)</p>
-              <ol className="text-xs text-zinc-500 space-y-0.5 mb-2">
-                <li>1. Copy the URL below</li>
-                <li>2. Right-click bookmark bar → <strong className="text-zinc-400">Add bookmark / New bookmark</strong></li>
-                <li>3. Name it <em className="text-zinc-400">Export X Bookmarks</em> and paste the URL</li>
-              </ol>
-              <CopyButton text={BOOKMARKLET_HREF} />
-            </div>
-          </div>
-        </div>
-      ),
-    },
-    {
-      num: 2,
-      title: (
-        <span>
-          Go to{' '}
-          <a
-            href={targetUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-indigo-400 hover:underline inline-flex items-center gap-1"
-          >
-            {targetLabel} <ExternalLink size={11} />
-          </a>{' '}
-          while logged in
-        </span>
-      ),
-    },
-    {
-      num: 3,
-      title: `Click "Export X Bookmarks" in your bookmark bar`,
-      content: (
-        <p className="text-xs text-zinc-500 mt-1">
-          A purple Export button will appear on the page
-        </p>
-      ),
-    },
-    {
-      num: 4,
-      title: 'Click "▶ Auto-scroll" to capture all bookmarks automatically',
-      content: (
-        <p className="text-xs text-zinc-500 mt-1">
-          A second button appears below the export button. Click it and it will scroll through all your bookmarks automatically — stopping when done. Or scroll manually if you prefer.
-        </p>
-      ),
-    },
-    {
-      num: 5,
-      title: `Click the purple "Export N ${sourceLabel}" button`,
-      content: (
-        <p className="text-xs text-zinc-500 mt-1">
-          A <code className="text-xs bg-zinc-800 px-1 py-0.5 rounded">{sourceLabel}.json</code> file will download automatically.
-          Upload it below.
-        </p>
-      ),
-    },
-  ]
+interface DirectProgress {
+  sessionId: string | null
+  source: 'bookmark' | 'like'
+  received: number
+  imported: number
+  skipped: number
+  batches: number
+  done: boolean
+  total: number | null
+  startedAt: string | null
+  updatedAt: string | null
+  error: string | null
+}
+
+interface XIds {
+  bookmarks: string
+  likes: string | null
+  source: string
+  discoveredAt: string
+}
+
+function DirectImportTab({ onDone }: { onDone: (result: ImportResult) => void }) {
+  const [source, setSource] = useState<'bookmark' | 'like'>('bookmark')
+  const [ids, setIds] = useState<XIds | null>(null)
+  const [idsError, setIdsError] = useState('')
+  const [progress, setProgress] = useState<DirectProgress | null>(null)
+  const [showConsole, setShowConsole] = useState(false)
+  const seenSession = useRef<string | null>(null)
+  const finished = useRef(false)
+
+  useEffect(() => {
+    fetch('/api/import/x-ids')
+      .then((r) => r.json())
+      .then((d: XIds) => setIds(d))
+      .catch(() => setIdsError('Could not look up X query IDs. Check your connection and reload.'))
+  }, [])
+
+  // Poll progress so the user can watch the import land while x.com does the work
+  useEffect(() => {
+    const t = setInterval(() => {
+      fetch('/api/import/bookmarklet')
+        .then((r) => r.json())
+        .then((p: DirectProgress) => {
+          if (!p.sessionId) return
+          // Only react to runs that started after this page opened
+          if (seenSession.current === null) { seenSession.current = p.done ? p.sessionId : '' }
+          if (p.sessionId === seenSession.current) return
+          setProgress(p)
+          if (p.done && !finished.current) {
+            finished.current = true
+            onDone({ imported: p.imported, skipped: p.skipped, total: p.received, parsed: p.received })
+          }
+        })
+        .catch(() => {})
+    }, 1500)
+    return () => clearInterval(t)
+  }, [onDone])
+
+  const script = ids
+    ? buildDirectImportScript({
+        origin: window.location.origin,
+        bookmarksQueryId: ids.bookmarks,
+        likesQueryId: ids.likes,
+        source,
+      })
+    : ''
+  const href = script ? toBookmarkletHref(script) : ''
+  const label = source === 'like' ? 'Import X Likes → sortX' : 'Import X Bookmarks → sortX'
+  const targetUrl = 'https://x.com/i/history'
 
   return (
     <div className="space-y-6">
-      <ol className="space-y-4">
-        {steps.map((step, i) => (
-          <li key={i} className="flex gap-3">
-            <div className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-xs font-bold text-indigo-400 mt-0.5">
-              {step.num}
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm text-zinc-300 leading-relaxed">{step.title}</p>
-              {step.content}
-            </div>
-          </li>
+      <div className="text-xs text-zinc-500 space-y-1.5 bg-zinc-800/50 border border-zinc-700/50 rounded-xl p-4">
+        <p className="text-zinc-300 font-medium text-sm mb-1 flex items-center gap-2">
+          <Sparkles size={14} className="text-indigo-400" />
+          Pulls everything, no scrolling
+        </p>
+        <p>
+          The button below runs inside x.com using your existing login. It asks X&apos;s own API for your {source === 'like' ? 'likes' : 'bookmarks'} page by page
+          and hands them to this window. Thousands of posts take a couple of minutes. Nothing is sent anywhere except this app.
+        </p>
+      </div>
+
+      {/* Source toggle */}
+      <div className="flex gap-1 p-1 bg-zinc-800 rounded-xl w-fit">
+        {(['bookmark', 'like'] as const).map((s) => (
+          <button
+            key={s}
+            onClick={() => setSource(s)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${source === s ? 'bg-zinc-900 text-zinc-100 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+          >
+            {s === 'bookmark' ? 'Bookmarks' : 'Likes'}
+          </button>
         ))}
+      </div>
+
+      {idsError && (
+        <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{idsError}</p>
+      )}
+
+      <ol className="space-y-4">
+        <li className="flex gap-3">
+          <div className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-xs font-bold text-indigo-400 mt-0.5">1</div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm text-zinc-300 leading-relaxed">Add the button to your bookmarks bar</p>
+            <p className="text-xs text-zinc-500 mt-1">Show the bar first: <strong className="text-zinc-300">View → Always Show Bookmarks Bar</strong> (⌘⇧B).</p>
+            <div className="mt-2 space-y-2">
+              <div className="flex items-center gap-3 p-3 rounded-xl bg-zinc-800/60 border border-zinc-700/50">
+                <div className="shrink-0 w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs font-bold">A</div>
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-zinc-300 mb-1.5">Drag this to the bookmarks bar</p>
+                  {href ? <DraggableBookmarklet href={href} label={label} /> : <span className="text-xs text-zinc-500 inline-flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> preparing…</span>}
+                </div>
+              </div>
+              <div className="flex items-start gap-3 p-3 rounded-xl bg-zinc-800/60 border border-zinc-700/50">
+                <div className="shrink-0 w-6 h-6 rounded-full bg-zinc-600/40 text-zinc-400 flex items-center justify-center text-xs font-bold mt-0.5">B</div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-medium text-zinc-300 mb-1.5">Or add it manually</p>
+                  <ol className="text-xs text-zinc-500 space-y-0.5 mb-2">
+                    <li>1. Copy the link below</li>
+                    <li>2. Right-click the bookmarks bar → <strong className="text-zinc-400">Add page / New bookmark</strong></li>
+                    <li>3. Name it anything and paste the link as the URL</li>
+                  </ol>
+                  {href && <CopyButton text={href} />}
+                </div>
+              </div>
+            </div>
+          </div>
+        </li>
+        <li className="flex gap-3">
+          <div className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-xs font-bold text-indigo-400 mt-0.5">2</div>
+          <div className="min-w-0">
+            <p className="text-sm text-zinc-300 leading-relaxed">Open X from here, then click the button in your bookmarks bar on that page</p>
+            <button
+              onClick={() => { window.open(targetUrl, 'sortx-x') }}
+              className="mt-2 inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-zinc-100 hover:bg-white text-zinc-900 text-xs font-semibold transition-colors"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+              Open X in a new tab
+            </button>
+            <p className="text-xs text-zinc-500 mt-2">
+              Opening it from this button lets the X tab talk back to this page. A small sortX panel appears on X and counts up as it fetches; leave both tabs open until it says Done.
+              If you opened X yourself, the bookmarklet will open a sortX window instead.
+            </p>
+          </div>
+        </li>
+        <li className="flex gap-3">
+          <div className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-xs font-bold text-indigo-400 mt-0.5">3</div>
+          <div className="min-w-0">
+            <p className="text-sm text-zinc-300 leading-relaxed">Watch the count below — AI categorization starts automatically when it finishes</p>
+          </div>
+        </li>
       </ol>
 
-      <div className="border-t border-zinc-800 pt-5">
-        <p className="text-xs text-zinc-500 mb-3 uppercase tracking-wider font-medium">Upload the downloaded file</p>
-        <UploadZone onFile={onFile} />
+      {/* Live progress */}
+      {progress && (
+        <div className="flex items-center gap-3 px-4 py-3.5 rounded-xl bg-indigo-500/10 border border-indigo-500/25">
+          {progress.done ? <CheckCircle size={16} className="text-emerald-400 shrink-0" /> : <Loader2 size={16} className="text-indigo-400 animate-spin shrink-0" />}
+          <div className="min-w-0 flex-1">
+            <p className="text-sm text-indigo-200">
+              <span className="font-semibold">{progress.received.toLocaleString()}</span> {progress.source === 'like' ? 'likes' : 'bookmarks'} received
+              <span className="text-indigo-300/70"> · {progress.imported.toLocaleString()} new · {progress.skipped.toLocaleString()} already here</span>
+            </p>
+            <p className="text-xs text-indigo-300/60 mt-0.5">{progress.done ? 'Finished' : 'Receiving from x.com…'}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Console alternative */}
+      <div className="border-t border-zinc-800 pt-4">
+        <button onClick={() => setShowConsole((v) => !v)} className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+          {showConsole ? '▾' : '▸'} Bookmarklets blocked? Run it from the browser console instead
+        </button>
+        {showConsole && script && (
+          <div className="mt-3 space-y-2">
+            <p className="text-xs text-zinc-500">
+              On x.com press <kbd className="text-xs bg-zinc-800 border border-zinc-700 px-1.5 py-0.5 rounded font-mono">⌘⌥J</kbd> (Mac) or{' '}
+              <kbd className="text-xs bg-zinc-800 border border-zinc-700 px-1.5 py-0.5 rounded font-mono">F12</kbd>, open the Console tab, paste, and press Enter.
+              Chrome may ask you to type <code className="text-zinc-400">allow pasting</code> first.
+            </p>
+            <div className="relative rounded-xl overflow-hidden border border-zinc-700 bg-zinc-950">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800">
+                <span className="text-xs text-zinc-600 font-mono">console script</span>
+                <CopyButton text={script} />
+              </div>
+              <pre className="text-xs text-zinc-400 p-3 overflow-auto max-h-32 font-mono leading-relaxed">{script.slice(0, 260)}…</pre>
+            </div>
+          </div>
+        )}
       </div>
+
+      {ids && (
+        <p className="text-[11px] text-zinc-600">
+          X API ids {ids.source === 'discovered' ? 'auto-detected' : ids.source === 'env' ? 'from environment' : 'from fallback'} · {new Date(ids.discoveredAt).toLocaleString()}
+        </p>
+      )}
     </div>
   )
 }
 
-function ConsoleTab({ onFile, importSource }: { onFile: (file: File) => void; importSource: 'bookmark' | 'like' }) {
-  const targetUrl = importSource === 'like' ? 'https://x.com' : 'https://x.com/i/bookmarks'
-  const targetLabel = importSource === 'like' ? 'x.com/YourUsername/likes' : 'x.com/i/bookmarks'
-  const sourceLabel = importSource === 'like' ? 'likes' : 'bookmarks'
-  const steps = [
-    {
-      num: 1,
-      title: (
-        <span>
-          Go to{' '}
-          <a
-            href={targetUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-indigo-400 hover:underline inline-flex items-center gap-1"
-          >
-            {targetLabel} <ExternalLink size={11} />
-          </a>{' '}
-          while logged in
-        </span>
-      ),
-    },
-    {
-      num: 2,
-      title: 'Open browser DevTools and go to the Console tab',
-      content: (
-        <p className="text-xs text-zinc-500 mt-1">
-          Press <kbd className="text-xs bg-zinc-800 border border-zinc-700 px-1.5 py-0.5 rounded font-mono">F12</kbd> on Windows/Linux or{' '}
-          <kbd className="text-xs bg-zinc-800 border border-zinc-700 px-1.5 py-0.5 rounded font-mono">⌘⌥J</kbd> on Mac,
-          then click the <strong className="text-zinc-300">Console</strong> tab
-        </p>
-      ),
-    },
-    {
-      num: 3,
-      title: 'Paste and run the script below',
-      content: (
-        <div className="mt-2">
-          <div className="relative rounded-xl overflow-hidden border border-zinc-700 bg-zinc-950">
-            <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800">
-              <span className="text-xs text-zinc-600 font-mono">console script</span>
-              <CopyButton text={CONSOLE_SCRIPT} />
-            </div>
-            <pre className="text-xs text-zinc-400 p-3 overflow-auto max-h-40 font-mono leading-relaxed">
-              {CONSOLE_SCRIPT.slice(0, 300)}...
-            </pre>
-          </div>
-        </div>
-      ),
-    },
-    {
-      num: 4,
-      title: `Press Enter, then scroll through all your ${sourceLabel}`,
-      content: (
-        <p className="text-xs text-zinc-500 mt-1">
-          A purple button will appear. Scroll slowly to capture all {sourceLabel}, then click the button to download.
-        </p>
-      ),
-    },
-  ]
-
+function FileImportTab({ onFile }: { onFile: (file: File) => void }) {
   return (
-    <div className="space-y-6">
-      <ol className="space-y-4">
-        {steps.map((step, i) => (
-          <li key={i} className="flex gap-3">
-            <div className="flex-shrink-0 w-6 h-6 rounded-full bg-zinc-700 border border-zinc-600 flex items-center justify-center text-xs font-bold text-zinc-400 mt-0.5">
-              {step.num}
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm text-zinc-300 leading-relaxed">{step.title}</p>
-              {step.content}
-            </div>
-          </li>
-        ))}
-      </ol>
-
-      <div className="border-t border-zinc-800 pt-5">
-        <p className="text-xs text-zinc-500 mb-3 uppercase tracking-wider font-medium">Upload the downloaded file</p>
-        <UploadZone onFile={onFile} />
-      </div>
+    <div className="space-y-5">
+      <p className="text-xs text-zinc-500">
+        Upload a JSON export: a file saved by the direct importer when sortX was unreachable, an older Siftly/sortX export, or a
+        twitter-web-exporter file.
+      </p>
+      <UploadZone onFile={onFile} />
     </div>
   )
 }
@@ -880,53 +599,37 @@ function LiveImportTab({ onSynced }: { onSynced: (result: ImportResult) => void 
   )
 }
 
-function InstructionsStep({ onFile, importSource, onLiveSynced }: { onFile: (file: File) => void; importSource: 'bookmark' | 'like'; onLiveSynced: (result: ImportResult) => void }) {
-  const [method, setMethod] = useState<Method>('bookmarklet')
+function InstructionsStep({ onFile, onLiveSynced, onDirectDone }: { onFile: (file: File) => void; onLiveSynced: (result: ImportResult) => void; onDirectDone: (result: ImportResult) => void }) {
+  const [method, setMethod] = useState<Method>('direct')
+
+  const tabs: { id: Method; label: React.ReactNode }[] = [
+    { id: 'direct', label: <><Sparkles size={13} className="inline -mt-0.5 mr-1" />Direct import<span className="ml-1.5 text-xs text-indigo-400 font-normal">Recommended</span></> },
+    { id: 'file', label: <><Upload size={13} className="inline -mt-0.5 mr-1" />Upload JSON</> },
+    { id: 'live', label: <><KeyRound size={13} className="inline -mt-0.5 mr-1" />X API</> },
+  ]
 
   return (
     <div>
-      {/* Method tabs */}
       <div className="flex gap-1 mb-6 p-1 bg-zinc-800 rounded-xl">
-        <button
-          onClick={() => setMethod('live')}
-          className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-            method === 'live'
-              ? 'bg-zinc-900 text-zinc-100 shadow-sm'
-              : 'text-zinc-500 hover:text-zinc-300'
-          }`}
-        >
-          <RefreshCw size={13} className="inline -mt-0.5 mr-1" />
-          Live Import
-          <span className="ml-1.5 text-xs text-indigo-400 font-normal">Recommended</span>
-        </button>
-        <button
-          onClick={() => setMethod('bookmarklet')}
-          className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-            method === 'bookmarklet'
-              ? 'bg-zinc-900 text-zinc-100 shadow-sm'
-              : 'text-zinc-500 hover:text-zinc-300'
-          }`}
-        >
-          Bookmarklet
-        </button>
-        <button
-          onClick={() => setMethod('console')}
-          className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-            method === 'console'
-              ? 'bg-zinc-900 text-zinc-100 shadow-sm'
-              : 'text-zinc-500 hover:text-zinc-300'
-          }`}
-        >
-          {'</>'} Console
-        </button>
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setMethod(t.id)}
+            className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+              method === t.id ? 'bg-zinc-900 text-zinc-100 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
-      {method === 'live' ? (
-        <LiveImportTab onSynced={onLiveSynced} />
-      ) : method === 'bookmarklet' ? (
-        <BookmarkletTab onFile={onFile} importSource={importSource} />
+      {method === 'direct' ? (
+        <DirectImportTab onDone={onDirectDone} />
+      ) : method === 'file' ? (
+        <FileImportTab onFile={onFile} />
       ) : (
-        <ConsoleTab onFile={onFile} importSource={importSource} />
+        <LiveImportTab onSynced={onLiveSynced} />
       )}
     </div>
   )
@@ -1312,6 +1015,42 @@ export default function ImportPage() {
     setTimeout(() => setStep(3), 1500)
   }
 
+  const handleDirectDone = useCallback((result: ImportResult) => {
+    setImportResult(result)
+    setStep(2)
+    setTimeout(() => setStep(3), 1500)
+  }, [])
+
+  // Receive batches from the direct-import script running on x.com.
+  // x.com's CSP blocks fetch() to other origins, so the script talks to this
+  // window with postMessage and we forward to our own API.
+  useEffect(() => {
+    const ALLOWED = new Set(['https://x.com', 'https://twitter.com', 'https://mobile.x.com', 'https://mobile.twitter.com'])
+    async function onMessage(ev: MessageEvent) {
+      if (!ALLOWED.has(ev.origin)) return
+      const d = ev.data as { type?: string; sessionId?: string; seq?: number; tweets?: unknown[]; source?: string; done?: boolean; total?: number } | null
+      if (!d || typeof d.sessionId !== 'string') return
+      const reply = (msg: Record<string, unknown>) => {
+        try { (ev.source as Window | null)?.postMessage({ ...msg, sessionId: d.sessionId }, ev.origin) } catch { /* window gone */ }
+      }
+      if (d.type === 'sortx:hello') { reply({ type: 'sortx:ready' }); return }
+      if (d.type !== 'sortx:batch') return
+      try {
+        const res = await fetch('/api/import/bookmarklet', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tweets: d.tweets ?? [], source: d.source, sessionId: d.sessionId, done: d.done, total: d.total }),
+        })
+        const j = (await res.json()) as { imported?: number; skipped?: number; error?: string }
+        reply({ type: 'sortx:ack', seq: d.seq, imported: j.imported ?? 0, skipped: j.skipped ?? 0, error: res.ok ? undefined : (j.error ?? `HTTP ${res.status}`) })
+      } catch (err) {
+        reply({ type: 'sortx:ack', seq: d.seq, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
+
   async function handleFile(file: File) {
     setStep(2)
     setImporting(true)
@@ -1358,7 +1097,7 @@ export default function ImportPage() {
     <div className="p-8 max-w-2xl mx-auto">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-zinc-100">Import Bookmarks</h1>
-        <p className="text-zinc-400 mt-1">Export your X/Twitter bookmarks as JSON, then upload below.</p>
+        <p className="text-zinc-400 mt-1">Pull your X bookmarks and likes into sortX. Re-run any time; only new posts are added.</p>
       </div>
 
       {step === 1 && <UncategorizedBanner onCategorize={() => setStep(3)} onReprocess={() => { setForceReprocess(true); setStep(3) }} />}
@@ -1372,7 +1111,7 @@ export default function ImportPage() {
       <StepIndicator current={step} />
 
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
-        {step === 1 && <InstructionsStep onFile={handleFile} importSource={importSource} onLiveSynced={handleLiveSynced} />}
+        {step === 1 && <InstructionsStep onFile={handleFile} onLiveSynced={handleLiveSynced} onDirectDone={handleDirectDone} />}
         {step === 2 && (
           <ImportingStep
             result={importing ? null : importResult}

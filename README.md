@@ -38,6 +38,7 @@ Each of those is understood, not just keyword-matched: authors, time ranges, med
 | Ask AI | Rerank 150 loosely selected rows | Rerank the top 40 hybrid candidates, with per-result reasons. Cheaper and more accurate. Falls back gracefully when no AI is configured. |
 | Search-as-you-type | Cmd+K did substring matching on tweet text | Cmd+K and the Search page use hybrid search with prefix matching |
 | Import speed | One SELECT + one INSERT per bookmark | Bulk dedupe, transactional writes, entities extracted on import, and new posts are indexed for search immediately |
+| Import method | Bookmarklet that sniffed network traffic while auto-scrolling; broke when X moved bookmarks to the new History page | **Direct import**: calls X's Bookmarks/Likes API with cursors from inside x.com, auto-discovers X's rotating query IDs, streams to sortX over postMessage |
 | Import data | Text, author, media | Also **long-form post text**, **quoted tweets**, like / repost / reply / view counts, language |
 | Sorting | Newest / oldest | Plus **most liked**, and filter by author |
 | Pipeline | 4 stages | 5 stages — a final indexing stage keeps the search indexes in sync with new tags and categories |
@@ -70,17 +71,21 @@ npx next dev
 
 ## Import your bookmarks
 
-Go to **Import** in the app. The bookmarklet is the reliable path:
+Go to **Import** in the app. **Direct import** is the reliable path: it calls X's own bookmarks API from inside your logged-in x.com tab and pages through everything with cursors. No scrolling, no network sniffing, and it copes with X rotating its internal query IDs (sortX looks the current IDs up from X's public JS bundles).
 
-1. Drag **Export X Bookmarks** to your bookmarks bar (or copy the URL into a new bookmark).
-2. Open [x.com/i/bookmarks](https://x.com/i/bookmarks) while logged in and click the bookmarklet.
-3. Click **▶ Auto-scroll**. It walks your whole bookmark list and captures every post as X loads it.
-4. Click **Export N bookmarks** — a `bookmarks.json` downloads.
-5. Drop the file on the Import page.
+1. On the Import page, drag **Import X Bookmarks → sortX** to your bookmarks bar (or copy the link and add it as a bookmark manually).
+2. Click **Open X in a new tab** on the Import page. Opening X from sortX gives the X tab a handle back to sortX.
+3. On the X tab, click the bookmarklet. A small sortX panel appears and counts up as it fetches, 100 posts per page.
+4. Posts stream into sortX as they arrive. When the panel says Done, sortX starts AI categorization automatically.
 
-The same bookmarklet works on `x.com/<you>/likes`. Re-importing is safe: duplicates are skipped and only new posts are added. Imported posts are keyword-searchable immediately and get semantic vectors in the background within seconds.
+Notes:
 
-Other paths: a console script (same capture, no bookmarklet), cookie-based sync on a schedule (Settings), and the official X OAuth flow (needs a paid X API tier).
+- x.com's Content Security Policy blocks pages from calling other origins, so the script hands posts to the sortX window with `postMessage` instead of a direct request. If it cannot reach a sortX window it downloads a JSON file you can upload on the Import page.
+- Switch the toggle to **Likes** to pull your liked posts the same way.
+- Re-running is safe: duplicates are skipped, only new posts are added. Imported posts are keyword-searchable immediately and get semantic vectors in the background within seconds.
+- If bookmarklets are blocked in your browser, expand "Run it from the browser console instead" for a paste-able version.
+
+Other paths: upload a JSON export (from the fallback above, an older Siftly export, or twitter-web-exporter), cookie-based scheduled sync (API only: `POST /api/import/live`), and the official X OAuth flow (needs a paid X API tier).
 
 ## Search
 
@@ -152,7 +157,7 @@ app/
   api/search/             GET  hybrid search
   api/search/ai/          POST rerank top candidates with the configured model
   api/search/index/       GET status · POST build vectors · DELETE stop
-  api/import/*            JSON upload, bookmarklet, cookie sync, OAuth — all use lib/import-bookmarks
+  api/import/*            JSON upload, direct import receiver (+progress), x-ids, cookie sync, OAuth — all use lib/import-bookmarks
   api/categorize/         5-stage pipeline with live progress
 lib/
   query-parser.ts         plain English → terms + author/date/media/category/sort filters (pure)
@@ -161,6 +166,8 @@ lib/
   fts.ts                  FTS5 index with cleaned text columns and BM25 column weights
   rank.ts                 Reciprocal Rank Fusion, cosine helpers (pure)
   tweet-normalize.ts      X GraphQL tweet → ParsedBookmark (pure)
+  x-query-ids.ts          discovers X's current GraphQL query IDs from public bundles (cached 24h)
+  x-direct-import-script.ts  builds the in-page importer (bookmarklet / console)
   parser.ts               every JSON export format → ParsedBookmark (pure)
   import-bookmarks.ts     bulk dedupe + transactional writes + immediate indexing
   serialize-bookmark.ts   one shape for bookmark JSON across routes

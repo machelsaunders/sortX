@@ -1,3 +1,5 @@
+import { tweetResultToParsed, type TweetResult } from '@/lib/tweet-normalize'
+
 export interface ParsedMedia {
   type: 'photo' | 'video' | 'gif'
   url: string
@@ -348,6 +350,10 @@ function convertSiftlyExportRow(row: SiftlyExportItem): RawTweet {
   }
 }
 
+function isGraphqlTweet(item: unknown): boolean {
+  return typeof item === 'object' && item !== null && 'rest_id' in item && ('legacy' in item || 'core' in item || 'tweet' in item)
+}
+
 function normalizeTweetArray(parsed: unknown): RawTweet[] {
   // Console script export format: { exportDate, totalBookmarks, bookmarks: [...] }
   if (isConsoleExportFormat(parsed)) {
@@ -380,6 +386,16 @@ function normalizeTweetArray(parsed: unknown): RawTweet[] {
   return []
 }
 
+/** Raw GraphQL `TweetResult` objects (what the direct-import script saves when sortX is unreachable). */
+function extractGraphqlTweets(parsed: unknown): unknown[] | null {
+  if (Array.isArray(parsed)) return parsed.length > 0 && isGraphqlTweet(parsed[0]) ? parsed : null
+  if (typeof parsed === 'object' && parsed !== null) {
+    const t = (parsed as Record<string, unknown>).tweets
+    if (Array.isArray(t) && t.length > 0 && isGraphqlTweet(t[0])) return t
+  }
+  return null
+}
+
 export function parseBookmarksJson(jsonString: string): ParsedBookmark[] {
   if (!jsonString || jsonString.trim() === '') {
     throw new Error('Empty JSON string provided')
@@ -390,6 +406,13 @@ export function parseBookmarksJson(jsonString: string): ParsedBookmark[] {
     parsed = JSON.parse(jsonString)
   } catch (err) {
     throw new Error(`Invalid JSON: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  const graphql = extractGraphqlTweets(parsed)
+  if (graphql) {
+    return graphql
+      .map((t) => tweetResultToParsed(t as TweetResult))
+      .filter((b): b is ParsedBookmark => b !== null)
   }
 
   const tweets = normalizeTweetArray(parsed)

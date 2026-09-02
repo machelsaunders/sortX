@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { importParsedBookmarks } from '@/lib/import-bookmarks'
 import { parseTimeline } from '@/lib/twitter-api'
 import { tweetResultToParsed } from '@/lib/tweet-normalize'
+import { getXQueryIds, TIMELINE_FEATURES, addMissingFeatures } from '@/lib/x-query-ids'
 
 /**
  * One-shot cookie import of bookmarks or likes. Body: { authToken, ct0, source?, userId? }.
@@ -10,31 +11,8 @@ import { tweetResultToParsed } from '@/lib/tweet-normalize'
 
 const BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA'
 
-const FEATURES = JSON.stringify({
-  graphql_timeline_v2_bookmark_timeline: true,
-  responsive_web_graphql_exclude_directive_enabled: true,
-  verified_phone_label_enabled: false,
-  creator_subscriptions_tweet_preview_api_enabled: true,
-  responsive_web_graphql_timeline_navigation_enabled: true,
-  responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
-  tweetypie_unmention_optimization_enabled: true,
-  responsive_web_edit_tweet_api_enabled: true,
-  graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
-  view_counts_everywhere_api_enabled: true,
-  longform_notetweets_consumption_enabled: true,
-  responsive_web_twitter_article_tweet_consumption_enabled: true,
-  tweet_awards_web_tipping_enabled: false,
-  freedom_of_speech_not_reach_fetch_enabled: true,
-  standardized_nudges_misinfo: true,
-  tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: true,
-  longform_notetweets_rich_text_read_enabled: true,
-  longform_notetweets_inline_media_enabled: true,
-  responsive_web_enhance_cards_enabled: false,
-})
-
 const ENDPOINTS = {
   bookmark: {
-    queryId: process.env.X_BOOKMARKS_QUERY_ID ?? 'xLjCVTqYWz8CGSprLU349w',
     operationName: 'Bookmarks',
     referer: 'https://x.com/i/bookmarks',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -43,7 +21,6 @@ const ENDPOINTS = {
   like: {
     // Find the current Likes query ID: open x.com/<you>/likes with the Network tab open,
     // filter "graphql", and copy the ID from the "Likes" request path.
-    queryId: process.env.X_LIKES_QUERY_ID ?? '',
     operationName: 'Likes',
     referer: 'https://x.com',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -56,15 +33,17 @@ const ENDPOINTS = {
 
 type Source = keyof typeof ENDPOINTS
 
-async function fetchPage(authToken: string, ct0: string, source: Source, cursor?: string, userId?: string) {
+const features: Record<string, boolean> = { ...TIMELINE_FEATURES }
+
+async function fetchPage(authToken: string, ct0: string, source: Source, queryId: string, cursor?: string, userId?: string) {
   const cfg = ENDPOINTS[source]
   const variables = JSON.stringify({
     count: 100,
     includePromotedContent: false,
-    ...(source === 'like' && userId ? { userId } : {}),
+    ...(source === 'like' && userId ? { userId, withClientEventToken: false, withBirdwatchNotes: false, withVoice: true, withV2Timeline: true } : {}),
     ...(cursor ? { cursor } : {}),
   })
-  const url = `https://x.com/i/api/graphql/${cfg.queryId}/${cfg.operationName}?variables=${encodeURIComponent(variables)}&features=${encodeURIComponent(FEATURES)}`
+  const url = `https://x.com/i/api/graphql/${queryId}/${cfg.operationName}?variables=${encodeURIComponent(variables)}&features=${encodeURIComponent(JSON.stringify(features))}`
 
   const res = await fetch(url, {
     headers: {
@@ -80,11 +59,12 @@ async function fetchPage(authToken: string, ct0: string, source: Source, cursor?
       Referer: cfg.referer,
     },
   })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`Twitter API ${res.status}: ${text.slice(0, 300)}`)
+  const text = await res.text()
+  if (res.status === 400 && addMissingFeatures(text, features).length > 0) {
+    return fetchPage(authToken, ct0, source, queryId, cursor, userId)
   }
-  return res.json()
+  if (!res.ok) throw new Error(`Twitter API ${res.status}: ${text.slice(0, 300)}`)
+  return JSON.parse(text)
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -105,8 +85,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (source === 'like' && !userId) {
     return NextResponse.json({ error: 'userId is required for importing likes' }, { status: 400 })
   }
-  if (source === 'like' && !ENDPOINTS.like.queryId) {
-    return NextResponse.json({ error: 'Set X_LIKES_QUERY_ID in your environment to import likes' }, { status: 400 })
+  const ids = await getXQueryIds()
+  const queryId = source === 'like' ? ids.likes : ids.bookmarks
+  if (!queryId) {
+    return NextResponse.json({ error: 'Could not determine the X query ID for likes. Set X_LIKES_QUERY_ID.' }, { status: 400 })
   }
 
   let imported = 0
@@ -116,7 +98,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   try {
     for (let page = 0; page < MAX_PAGES; page++) {
-      const data = await fetchPage(authToken.trim(), ct0.trim(), source, cursor, userId)
+      const data = await fetchPage(authToken.trim(), ct0.trim(), source, queryId, cursor, userId)
       const { tweets, nextCursor } = parseTimeline(ENDPOINTS[source].getInstructions(data))
       const parsed = tweets.map(tweetResultToParsed).filter((b): b is NonNullable<typeof b> => b !== null)
       const result = await importParsedBookmarks(parsed, source)
