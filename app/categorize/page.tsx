@@ -204,7 +204,7 @@ export default function CategorizePage() {
                   { key: 'entitiesExtracted', label: 'entities extracted', icon: <Tag size={13} />, active: status.stage === 'entities' },
                   { key: 'enriched', label: 'bookmarks enriched', icon: <Brain size={13} />, active: status.stage === 'enrichment' || status.stage === 'parallel' },
                   { key: 'categorized', label: 'categorized', icon: <Layers size={13} />, active: status.stage === 'categorize' || status.stage === 'parallel' },
-                  { key: 'indexed', label: 'indexed for search', icon: <Database size={13} />, active: status.stage === 'index' },
+                  { key: 'indexed', label: 'checked for search index', icon: <Database size={13} />, active: status.stage === 'index' },
                 ].map(({ key, label, icon, active }) => {
                   const count = status.stageCounts[key as keyof StageCounts]
                   const total = key === 'categorized' ? status.total : null
@@ -244,7 +244,7 @@ export default function CategorizePage() {
             )}
 
             {/* Overall progress bar */}
-            {(status?.stage === 'categorize' || status?.stage === 'parallel') && (
+            {(status?.stage === 'categorize' || status?.stage === 'parallel' || status?.stage === 'index') && (
               <div className="space-y-2">
                 <div className="flex justify-between text-xs text-zinc-500">
                   <span>

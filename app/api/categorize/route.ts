@@ -389,7 +389,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       await rebuildFts().catch((err) => console.error('FTS rebuild error:', err))
       try {
         counts.indexed = await embedBookmarks(null, {
-          onProgress: (done, total) => setState({ done, total, stageCounts: { ...counts } }),
+          onProgress: (done, total) => { counts.indexed = done; setState({ done, total, stageCounts: { ...counts } }) },
           shouldAbort,
         })
         setState({ stageCounts: { ...counts } })
