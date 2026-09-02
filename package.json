@@ -1,11 +1,11 @@
 {
-  "name": "siftly",
-  "version": "0.2.0",
-  "description": "Self-hosted Twitter/X bookmark manager with AI-powered categorization",
+  "name": "sortx",
+  "version": "0.3.0",
+  "description": "Self-hosted X/Twitter bookmark manager: import, AI categorization, and plain-English hybrid search (keyword + local semantic vectors)",
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/viperrcrypto/Siftly.git"
+    "url": "https://github.com/machelsaunders/sortX.git"
   },
   "scripts": {
     "dev": "next dev",
@@ -13,10 +13,13 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "siftly": "tsx cli/siftly.ts"
+    "siftly": "tsx cli/siftly.ts",
+    "typecheck": "tsc --noEmit",
+    "sortx": "tsx cli/siftly.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
+    "@huggingface/transformers": "^4.2.0",
     "@prisma/adapter-better-sqlite3": "^7.4.2",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-progress": "^1.1.8",

@@ -1,388 +1,154 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/db'
-import { ftsSearch } from '@/lib/fts'
+import { hybridSearch, toParsedInfo } from '@/lib/hybrid-search'
 import { AIClient, resolveAIClient } from '@/lib/ai-client'
 import { getActiveModel, getProvider } from '@/lib/settings'
-import { extractKeywords } from '@/lib/search-utils'
 import { getCliAvailability, claudePrompt, modelNameToCliAlias } from '@/lib/claude-cli-auth'
 import { getCodexCliAvailability, codexPrompt } from '@/lib/codex-cli'
+import { imageTagsToText } from '@/lib/fts'
+import type { SearchHit, SearchResponse } from '@/lib/types'
 
-// ─── Cache ────────────────────────────────────────────────────────────────────
-interface CacheEntry { results: unknown; expiresAt: number }
+/**
+ * "Ask AI" search: hybrid retrieval picks the best ~40 candidates, then the
+ * configured model reranks them, explains each match, and summarises what
+ * it found. Far cheaper and more accurate than sending 150 random rows.
+ */
+
+const CANDIDATES = 40
+const MAX_RESULTS = 15
+
+// ── Cache ─────────────────────────────────────────────────────────────────────
+interface CacheEntry { results: SearchResponse; expiresAt: number }
 const searchCache = new Map<string, CacheEntry>()
 const CACHE_TTL_MS = 5 * 60 * 1000
 
-function getCached(key: string): unknown | null {
+function getCached(key: string): SearchResponse | null {
   const entry = searchCache.get(key)
   if (!entry) return null
   if (Date.now() > entry.expiresAt) { searchCache.delete(key); return null }
   return entry.results
 }
-function setCache(key: string, results: unknown): void {
+function setCache(key: string, results: SearchResponse): void {
   if (searchCache.size >= 100) searchCache.delete(searchCache.keys().next().value!)
   searchCache.set(key, { results, expiresAt: Date.now() + CACHE_TTL_MS })
 }
-
-// ─── Module-level caches (avoid DB roundtrips on every search) ────────────────
-let _apiKey: string | null = null
-let _apiKeyExpiry = 0
-let _categoriesCache: { slug: string; name: string; description: string | null }[] | null = null
-let _categoriesCacheExpiry = 0
+export function clearAiSearchCache(): void {
+  searchCache.clear()
+}
 
 async function getDbApiKey(): Promise<string> {
-  if (_apiKey !== null && Date.now() < _apiKeyExpiry) return _apiKey
   const provider = await getProvider()
-  const keyName = provider === 'openai' ? 'openaiApiKey' : 'anthropicApiKey'
+  const keyName = provider === 'openai' ? 'openaiApiKey' : provider === 'minimax' ? 'minimaxApiKey' : 'anthropicApiKey'
   const setting = await prisma.setting.findUnique({ where: { key: keyName } })
-  const fromDb = setting?.value?.trim() ?? ''
-  _apiKey = fromDb
-  _apiKeyExpiry = Date.now() + 60_000
-  return _apiKey
-}
-async function getAllCategories() {
-  if (_categoriesCache && Date.now() < _categoriesCacheExpiry) return _categoriesCache
-  _categoriesCache = await prisma.category.findMany({ select: { slug: true, name: true, description: true } })
-  _categoriesCacheExpiry = Date.now() + 2 * 60 * 1000
-  return _categoriesCache
+  return setting?.value?.trim() ?? ''
 }
 
-/**
- * Map query intent signals to category slugs using cached category list.
- */
-async function detectIntentCategories(query: string): Promise<string[]> {
-  const q = query.toLowerCase()
-  const slugs = new Set<string>()
-
-  const allCats = await getAllCategories()
-
-  const INTENT_SIGNALS: Array<{ pattern: RegExp; slugHints: string[] }> = [
-    {
-      pattern: /meme|funny|humor|laugh|lol|joke|hilarious|comedy|satire|roast|viral|dank|wholesome|cringe|based|skit|parody/i,
-      slugHints: ['funny-memes'],
-    },
-    {
-      pattern: /crypto|bitcoin|btc|eth|sol|defi|nft|trading|chart|invest|token|wallet|blockchain|altcoin|memecoin|pump|dump|yield|staking|airdrop|web3|dex|liquidity|portfolio|stocks|options|macro|economy|dollar|inflation|fed|interest rate/i,
-      slugHints: ['finance-crypto'],
-    },
-    {
-      pattern: /code|coding|developer|programming|github|software|api|framework|library|debug|deploy|devops|backend|frontend|fullstack|typescript|javascript|python|rust|golang|java|swift|css|html|sql|cli|terminal|bash|docker|kubernetes|ci.?cd|open.?source|repo|pull request|lint/i,
-      slugHints: ['dev-tools'],
-    },
-    {
-      pattern: /\bai\b|llm|gpt|claude|openai|anthropic|gemini|mistral|llama|model|prompt|agent|machine learning|neural|deep learning|embedding|rag|fine.?tun|inference|transformer|diffusion|multimodal|copilot|cursor|midjourney|stable diffusion|image gen/i,
-      slugHints: ['ai-resources'],
-    },
-    {
-      pattern: /design|ui\b|ux\b|figma|typography|branding|logo|visual|color palette|layout|wireframe|prototype|tailwind|animation|motion|font|icon|component|design system|saas ui/i,
-      slugHints: ['design'],
-    },
-    {
-      pattern: /productivity|focus|habit|workflow|time management|system|note.?taking|task|pkm|second brain|obsidian|notion|roam|logseq|journaling|calendar|routine|morning|discipline|deep work|async/i,
-      slugHints: ['productivity'],
-    },
-    {
-      pattern: /news|breaking|announcement|launch|update|thread|essay|opinion|analysis|report|geopolitic|politic|regulation|lawsuit|acquisition|ipo|funding|raised|series/i,
-      slugHints: ['news'],
-    },
-  ]
-
-  for (const { pattern, slugHints } of INTENT_SIGNALS) {
-    if (pattern.test(q)) {
-      for (const hint of slugHints) {
-        for (const cat of allCats) {
-          if (
-            cat.slug === hint ||
-            cat.slug.includes(hint.split('-')[0]) ||
-            cat.name.toLowerCase().includes(hint.replace(/-/g, ' ')) ||
-            (cat.description && cat.description.toLowerCase().includes(hint.split('-')[0]))
-          ) {
-            slugs.add(cat.slug)
-          }
-        }
-      }
-    }
-  }
-
-  return Array.from(slugs)
-}
-
-/** Build a rich, readable index entry for a bookmark */
-function buildIndexEntry(b: {
-  id: string
-  tweetId: string
-  text: string
-  authorHandle: string
-  authorName: string
-  semanticTags: string | null
-  entities: string | null
-  mediaItems: { type: string; imageTags: string | null }[]
-  categories: { confidence: number; category: { slug: string; name: string } }[]
-}): string {
-  const lines: string[] = [`[${b.id}]`]
-
-  // Text — more generous limit for complex queries
-  lines.push(`text: ${b.text.slice(0, 350)}`)
-
-  // Image/media context — rich structured data
-  for (const m of b.mediaItems) {
-    if (!m.imageTags || m.imageTags === '{}') {
-      lines.push(`media: [${m.type}]`)
-      continue
-    }
-    try {
-      const p = JSON.parse(m.imageTags) as Record<string, unknown>
-      const parts: string[] = [`type=${m.type}`]
-      if (p.style) parts.push(`style=${p.style}`)
-      if (p.scene) parts.push(`scene=${p.scene}`)
-      if (p.action) parts.push(`action=${p.action}`)
-      if (p.mood) parts.push(`mood=${p.mood}`)
-      if (p.meme_template) parts.push(`meme=${p.meme_template}`)
-      if (Array.isArray(p.text_ocr) && (p.text_ocr as string[]).length)
-        parts.push(`ocr="${(p.text_ocr as string[]).join(' | ').slice(0, 250)}"`)
-      if (Array.isArray(p.people) && (p.people as string[]).length)
-        parts.push(`people=${(p.people as string[]).join(', ')}`)
-      if (Array.isArray(p.objects) && (p.objects as string[]).length)
-        parts.push(`objects=${(p.objects as string[]).slice(0, 8).join(', ')}`)
-      if (Array.isArray(p.tags) && (p.tags as string[]).length)
-        parts.push(`vtags=${(p.tags as string[]).slice(0, 25).join(', ')}`)
-      lines.push(`media: ${parts.join(' | ')}`)
-    } catch {
-      lines.push(`media: [${m.type}] ${m.imageTags.slice(0, 200)}`)
-    }
-  }
-
-  // AI semantic tags — full set
-  if (b.semanticTags && b.semanticTags !== '[]') {
-    try {
-      const tags = JSON.parse(b.semanticTags) as string[]
-      if (tags.length) lines.push(`ai_tags: ${tags.slice(0, 35).join(', ')}`)
-    } catch { /* ignore */ }
-  }
-
-  // Hashtags + tool mentions
-  if (b.entities) {
-    try {
-      const ent = JSON.parse(b.entities) as { hashtags?: string[]; tools?: string[]; mentions?: string[] }
-      const parts: string[] = []
-      if (ent.hashtags?.length) parts.push(`#${ent.hashtags.slice(0, 10).join(' #')}`)
-      if (ent.tools?.length) parts.push(`tools: ${ent.tools.join(', ')}`)
-      if (ent.mentions?.length) parts.push(`mentions: @${ent.mentions.slice(0, 5).join(' @')}`)
-      if (parts.length) lines.push(parts.join(' | '))
-    } catch { /* ignore */ }
-  }
-
-  // Categories with confidence
-  if (b.categories.length) {
-    const cats = b.categories
-      .filter((c) => c.confidence >= 0.5)
-      .map((c) => `${c.category.name}(${c.confidence.toFixed(1)})`)
-      .join(', ')
-    if (cats) lines.push(`categories: ${cats}`)
-  }
-
+function indexEntry(b: SearchHit): string {
+  const lines = [`[${b.id}] @${b.authorHandle}${b.tweetCreatedAt ? ` ${b.tweetCreatedAt.slice(0, 10)}` : ''}`]
+  lines.push(`text: ${b.text.replace(/\s+/g, ' ').slice(0, 320)}`)
+  if (b.quotedText) lines.push(`quoting: ${b.quotedText.replace(/\s+/g, ' ').slice(0, 160)}`)
+  const img = b.mediaItems.map((m) => imageTagsToText(m.imageTags ?? null)).filter(Boolean).join(' | ')
+  if (img) lines.push(`media: ${img.slice(0, 220)}`)
+  else if (b.mediaItems.length) lines.push(`media: ${b.mediaItems.map((m) => m.type).join(', ')}`)
+  if (b.categories.length) lines.push(`categories: ${b.categories.map((c) => c.name).join(', ')}`)
   return lines.join('\n')
 }
 
-// ─── Main handler ─────────────────────────────────────────────────────────────
+interface AiResponse {
+  matches: { id: string; score: number; reason: string }[]
+  explanation: string
+}
+
+function parseAiResponse(rawText: string): AiResponse {
+  const jsonMatch = rawText.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) return { matches: [], explanation: '' }
+  const parsed = JSON.parse(jsonMatch[0]) as Partial<AiResponse>
+  return {
+    matches: Array.isArray(parsed.matches) ? parsed.matches.filter((m) => m && typeof m.id === 'string') : [],
+    explanation: typeof parsed.explanation === 'string' ? parsed.explanation : '',
+  }
+}
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
   let body: { query?: string; category?: string } = {}
   try { body = await request.json() } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
-
   const { query, category } = body
   if (!query?.trim()) return NextResponse.json({ error: 'Query required' }, { status: 400 })
-
-  const apiKey = await getDbApiKey()
 
   const cacheKey = `${query.trim().toLowerCase()}::${category ?? ''}`
   const cached = getCached(cacheKey)
   if (cached) return NextResponse.json(cached)
 
-  let client: AIClient | null = null
-  try {
-    client = await resolveAIClient({ dbKey: apiKey })
-  } catch {
-    // SDK not available — will try CLI path
-  }
-  const model = await getActiveModel()
-  const provider = await getProvider()
-
-  const categoryFilter = category
-    ? { categories: { some: { category: { slug: category } } } }
-    : {}
-
-  // ── Step 1: Smart candidate selection ─────────────────────────────────────
-  const keywords = extractKeywords(query)
-  const intentSlugs = category ? [] : await detectIntentCategories(query)
-  const MAX_CANDIDATES = 150 // smaller, richer set beats larger, noisier set
-
-  const selectShape = {
-    id: true, tweetId: true, text: true, authorHandle: true, authorName: true,
-    tweetCreatedAt: true, importedAt: true, semanticTags: true, entities: true,
-    mediaItems: { select: { id: true, type: true, url: true, thumbnailUrl: true, imageTags: true } },
-    categories: {
-      include: { category: { select: { id: true, name: true, slug: true, color: true } } },
-      orderBy: { confidence: 'desc' as const },
-    },
-  } as const
-
-  // Try FTS5 first (fast, ranked by relevance); fall back to LIKE on error/empty
-  const ftsIds = keywords.length > 0 ? await ftsSearch(keywords) : []
-  const useFts = ftsIds.length > 0
-
-  // Build LIKE-based fallback conditions (used when FTS5 is empty/unavailable)
-  const keywordConditions = keywords.flatMap((kw) => [
-    { text: { contains: kw } },
-    { semanticTags: { contains: kw } },
-    { entities: { contains: kw } },
-    { mediaItems: { some: { imageTags: { contains: kw } } } },
-  ])
-
-  // Run keyword-filtered and category-intent queries in parallel
-  const [keywordHits, intentHits] = await Promise.all([
-    keywords.length > 0
-      ? prisma.bookmark.findMany({
-          where: {
-            ...categoryFilter,
-            ...(useFts
-              ? { id: { in: ftsIds } }
-              : { OR: keywordConditions }),
-          },
-          // FTS results are pre-ranked; LIKE results fall back to recency ordering
-          orderBy: useFts ? undefined : [{ enrichedAt: 'desc' }, { tweetCreatedAt: 'desc' }],
-          take: MAX_CANDIDATES,
-          select: selectShape,
-        })
-      : prisma.bookmark.findMany({ where: { id: 'never' }, select: selectShape }),
-
-    intentSlugs.length > 0
-      ? prisma.bookmark.findMany({
-          where: {
-            ...categoryFilter,
-            categories: { some: { category: { slug: { in: intentSlugs } } } },
-          },
-          orderBy: [{ enrichedAt: 'desc' }, { tweetCreatedAt: 'desc' }],
-          take: 80,
-          select: selectShape,
-        })
-      : prisma.bookmark.findMany({ where: { id: 'never' }, select: selectShape }),
-  ])
-
-  // Merge: keyword hits first (more specific), then intent hits, dedup by id
-  const seen = new Set<string>()
-  const merged: typeof keywordHits = []
-  for (const b of [...keywordHits, ...intentHits]) {
-    if (!seen.has(b.id)) { seen.add(b.id); merged.push(b) }
+  // ── Step 1: hybrid candidates ─────────────────────────────────────────────
+  const hybrid = await hybridSearch(query, { limit: CANDIDATES, category, candidates: 300 })
+  const base = {
+    total: hybrid.total,
+    parsed: toParsedInfo(hybrid.parsed),
+    usedSemantic: hybrid.usedSemantic,
+    tookMs: hybrid.tookMs,
   }
 
-  // If still very few candidates, pull a recent sample so Claude has something to work with
-  let bookmarks = merged
-  if (bookmarks.length < 20) {
-    const fallback = await prisma.bookmark.findMany({
-      where: categoryFilter,
-      orderBy: [{ enrichedAt: 'desc' }, { tweetCreatedAt: 'desc' }],
-      take: MAX_CANDIDATES,
-      select: selectShape,
-    })
-    const fallbackSeen = new Set(bookmarks.map((b) => b.id))
-    for (const b of fallback) {
-      if (!fallbackSeen.has(b.id)) { fallbackSeen.add(b.id); bookmarks.push(b) }
-    }
-    // Cap total
-    bookmarks = bookmarks.slice(0, MAX_CANDIDATES)
+  if (hybrid.bookmarks.length === 0) {
+    return NextResponse.json({ ...base, bookmarks: [], explanation: 'Nothing in your library matches that yet.' } satisfies SearchResponse)
   }
 
-  if (bookmarks.length === 0) {
-    return NextResponse.json({ bookmarks: [], explanation: 'No bookmarks found.' })
-  }
-
-  // ── Step 2: Build rich search index ───────────────────────────────────────
-  const indexEntries = bookmarks.map(buildIndexEntry)
-
-  // ── Step 3: Compose a better prompt ───────────────────────────────────────
-  const prompt = `You are an expert semantic search engine for a personal Twitter/X bookmark knowledge base. Find bookmarks that genuinely match what the user wants — even when exact words don't appear.
+  // ── Step 2: rerank with the configured model ──────────────────────────────
+  const entries = hybrid.bookmarks.map(indexEntry).join('\n---\n')
+  const prompt = `You are the search engine for someone's personal library of saved X/Twitter posts. Below are the ${hybrid.bookmarks.length} best candidates a keyword+semantic index found for their query. Pick the ones that genuinely answer what they want, in order.
 
 USER QUERY: "${query}"
-${category ? `RESTRICTED TO CATEGORY: "${category}"` : ''}
+${hybrid.parsed.filters.length ? `FILTERS ALREADY APPLIED: ${hybrid.parsed.filters.join(', ')}` : ''}
 
-HOW TO SEARCH:
-1. Understand INTENT first: what topic, emotion, visual, or use-case is the user after?
-2. Check ALL fields — the ai_tags field contains pre-computed semantic context and is highly reliable
-3. Consider synonyms and indirect matches: "identity verification problems" matches "bad KYC practices"
-4. For visual/meme queries: weight media fields heavily (scene, action, ocr text IN the image, vtags)
-5. Indirect signals count: if categories say "finance-crypto(0.9)" and query is about investing → likely relevant
-6. Score generously for semantic neighbors (0.4+), reserve 0.9+ for clear matches
+Judge by meaning, not word overlap. Use text, quoted text, image descriptions, and categories. A candidate about the same topic phrased differently is a match; one that only shares a common word is not.
 
-BOOKMARK FORMAT:
-[bookmark_id]
-text: tweet text (most direct signal)
-media: type | style | scene | action | mood | meme=template | ocr="text inside image" | objects | vtags=visual tags
-ai_tags: AI-generated search tags (pre-computed, highly reliable)
-#hashtags | tools: detected tools/products | @mentions
-categories: assigned categories with confidence scores
+CANDIDATES:
+${entries}
 
-BOOKMARKS (${bookmarks.length} total):
-${indexEntries.join('\n---\n')}
-
-Return ONLY valid JSON — no markdown, no prose outside the JSON object:
+Return ONLY JSON:
 {
-  "queryIntent": "one phrase describing what the user wants",
-  "matches": [
-    { "id": "bookmark_id", "score": 0.0-1.0, "reason": "≤10 words why it matches" }
-  ],
-  "explanation": "one sentence summarizing what was found and why"
+  "matches": [ { "id": "candidate id", "score": 0.0-1.0, "reason": "≤12 words, specific to this post" } ],
+  "explanation": "one plain sentence about what was found"
 }
+Rules: up to ${MAX_RESULTS} matches sorted by score, only ids from the list, no repeats, minimum score 0.3, and if nothing fits return an empty matches array.`
 
-Constraints:
-- Up to 15 matches, sorted by score descending
-- Minimum score 0.30 — be generous for semantically close matches
-- Never repeat an id
-- Only return ids from the list above
-- reason must be specific, not generic ("shows bitcoin price crash chart" not "related to crypto")`
+  const provider = await getProvider()
+  const model = await getActiveModel()
+  let ai: AiResponse | null = null
 
-  let aiResponse: { queryIntent?: string; matches: { id: string; score: number; reason: string }[]; explanation: string } = { matches: [], explanation: 'No results found.' }
-
-  const parseSearchResponse = (rawText: string): typeof aiResponse => {
-    const jsonMatch = rawText.match(/\{[\s\S]*\}/)
-    return jsonMatch
-      ? (JSON.parse(jsonMatch[0]) as typeof aiResponse)
-      : { matches: [], explanation: 'No results found.' }
-  }
-
-  // Try CLI first (works with ChatGPT OAuth), then fall back to SDK
-  let cliSucceeded = false
-  if (provider === 'openai' && await getCodexCliAvailability()) {
-    try {
+  try {
+    if (provider === 'openai' && await getCodexCliAvailability()) {
       const result = await codexPrompt(prompt, { timeoutMs: 90_000 })
-      if (result.success && result.data) {
-        aiResponse = parseSearchResponse(result.data)
-        cliSucceeded = true
-      }
-    } catch { /* fall through to SDK */ }
-  } else if (provider === 'anthropic' && await getCliAvailability()) {
-    try {
-      const cliModel = modelNameToCliAlias(model)
-      const result = await claudePrompt(prompt, { model: cliModel, timeoutMs: 90_000 })
-      if (result.success && result.data) {
-        aiResponse = parseSearchResponse(result.data)
-        cliSucceeded = true
-      }
-    } catch { /* fall through to SDK */ }
+      if (result.success && result.data) ai = parseAiResponse(result.data)
+    } else if (provider === 'anthropic' && await getCliAvailability()) {
+      const result = await claudePrompt(prompt, { model: modelNameToCliAlias(model), timeoutMs: 90_000 })
+      if (result.success && result.data) ai = parseAiResponse(result.data)
+    }
+  } catch (err) {
+    console.warn('[ai-search] CLI path failed, trying SDK:', err instanceof Error ? err.message : err)
   }
 
-  if (!cliSucceeded) {
-    if (!client) {
-      return NextResponse.json({ error: 'No CLI available and no API key configured. Add an API key in Settings or install Codex/Claude CLI.' }, { status: 400 })
-    }
+  if (!ai) {
+    let client: AIClient | null = null
     try {
-      const response = await client.createMessage({
-        model,
-        max_tokens: 1500,
-        messages: [{ role: 'user', content: prompt }],
-      })
-      const rawText = response.text ?? '{}'
-      aiResponse = parseSearchResponse(rawText)
+      client = await resolveAIClient({ dbKey: await getDbApiKey() })
+    } catch { /* no SDK auth */ }
+
+    if (!client) {
+      // No AI available: still return the hybrid results so the page is useful
+      const fallback: SearchResponse = {
+        ...base,
+        bookmarks: hybrid.bookmarks.slice(0, MAX_RESULTS),
+        explanation: 'AI is not configured, so these are the best keyword + semantic matches.',
+        aiUnavailable: true,
+      }
+      return NextResponse.json(fallback)
+    }
+
+    try {
+      const response = await client.createMessage({ model, max_tokens: 1500, messages: [{ role: 'user', content: prompt }] })
+      ai = parseAiResponse(response.text ?? '{}')
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
       console.error('AI search error:', errMsg)
@@ -390,37 +156,23 @@ Constraints:
     }
   }
 
-  // ── Step 4: Hydrate results ────────────────────────────────────────────────
-  const bookmarkById = new Map(bookmarks.map((b) => [b.id, b]))
-  const matchMap = new Map(aiResponse.matches.map((m) => [m.id, m]))
+  // ── Step 3: hydrate in AI order ───────────────────────────────────────────
+  const byId = new Map(hybrid.bookmarks.map((b) => [b.id, b]))
+  const seen = new Set<string>()
+  const bookmarks: SearchHit[] = []
+  for (const m of ai.matches.sort((a, b) => (b.score ?? 0) - (a.score ?? 0))) {
+    const b = byId.get(m.id)
+    if (!b || seen.has(m.id)) continue
+    seen.add(m.id)
+    bookmarks.push({ ...b, aiScore: typeof m.score === 'number' ? m.score : 0, aiReason: typeof m.reason === 'string' ? m.reason : '' })
+    if (bookmarks.length >= MAX_RESULTS) break
+  }
 
-  const results = aiResponse.matches
-    .sort((a, b) => b.score - a.score)
-    .map((match) => {
-      const b = bookmarkById.get(match.id)
-      if (!b) return null
-      return {
-        id: b.id,
-        tweetId: b.tweetId,
-        text: b.text,
-        authorHandle: b.authorHandle,
-        authorName: b.authorName,
-        tweetCreatedAt: b.tweetCreatedAt?.toISOString() ?? null,
-        importedAt: b.importedAt.toISOString(),
-        mediaItems: b.mediaItems.map((m) => ({
-          id: m.id, type: m.type, url: m.url, thumbnailUrl: m.thumbnailUrl, imageTags: m.imageTags ?? null,
-        })),
-        categories: b.categories.map((bc) => ({
-          id: bc.category.id, name: bc.category.name, slug: bc.category.slug,
-          color: bc.category.color, confidence: bc.confidence,
-        })),
-        aiScore: matchMap.get(b.id)?.score ?? 0,
-        aiReason: matchMap.get(b.id)?.reason ?? '',
-      }
-    })
-    .filter(Boolean)
-
-  const response = { bookmarks: results, explanation: aiResponse.explanation }
+  const response: SearchResponse = {
+    ...base,
+    bookmarks,
+    explanation: ai.explanation || (bookmarks.length ? `Found ${bookmarks.length} matching posts.` : 'Nothing in your library clearly matches that.'),
+  }
   setCache(cacheKey, response)
   return NextResponse.json(response)
 }

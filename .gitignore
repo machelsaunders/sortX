@@ -70,3 +70,6 @@ promo-video/
 *.swp
 *.swo
 *~
+
+# Local embedding model cache (downloaded on first search)
+.cache/

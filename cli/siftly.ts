@@ -1,7 +1,7 @@
 #!/usr/bin/env npx tsx
 import prisma from '@/lib/db'
-import { ftsSearch } from '@/lib/fts'
-import { extractKeywords } from '@/lib/search-utils'
+import { hybridSearch } from '@/lib/hybrid-search'
+import { runIndex, getEmbeddingStatus } from '@/lib/embeddings'
 
 // ─── Output ──────────────────────────────────────────────────────────────────
 
@@ -44,48 +44,50 @@ function parseArgs(args: string[]): { positional: string[]; flags: Record<string
 async function cmdSearch(args: string[]) {
   const { positional, flags } = parseArgs(args)
   const query = positional.join(' ')
-  if (!query) die('Usage: siftly search <query>')
+  if (!query) die('Usage: siftly search <plain-English query> [--limit N] [--category slug]')
 
   const limit = Math.min(parseInt(flags.limit ?? '20', 10) || 20, 100)
-  const keywords = extractKeywords(query)
-  if (keywords.length === 0) die('No searchable keywords in query')
-
-  const ftsIds = await ftsSearch(keywords)
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let where: any
-  if (ftsIds.length > 0) {
-    where = { id: { in: ftsIds } }
-  } else {
-    // Fallback to LIKE
-    where = {
-      OR: keywords.flatMap((kw) => [
-        { text: { contains: kw } },
-        { semanticTags: { contains: kw } },
-        { entities: { contains: kw } },
-      ]),
-    }
-  }
-
-  const bookmarks = await prisma.bookmark.findMany({
-    where,
-    take: limit,
-    orderBy: ftsIds.length > 0 ? undefined : [{ tweetCreatedAt: 'desc' }],
-    include: {
-      mediaItems: { select: { id: true, type: true, url: true } },
-      categories: {
-        include: { category: { select: { name: true, slug: true } } },
-        orderBy: { confidence: 'desc' },
-      },
-    },
-  })
+  const result = await hybridSearch(query, { limit, category: flags.category })
 
   output({
     query,
-    keywords,
-    count: bookmarks.length,
-    bookmarks: bookmarks.map(formatBookmark),
+    understood: {
+      terms: result.parsed.terms,
+      filters: result.parsed.filters,
+      author: result.parsed.author,
+      since: result.parsed.since?.toISOString() ?? null,
+      until: result.parsed.until?.toISOString() ?? null,
+      mediaType: result.parsed.mediaType,
+      category: result.parsed.category,
+      sort: result.parsed.sort,
+    },
+    usedSemantic: result.usedSemantic,
+    tookMs: result.tookMs,
+    count: result.bookmarks.length,
+    total: result.total,
+    bookmarks: result.bookmarks.map((b) => ({
+      id: b.id,
+      tweetId: b.tweetId,
+      url: `https://x.com/${b.authorHandle}/status/${b.tweetId}`,
+      author: `@${b.authorHandle}`,
+      date: b.tweetCreatedAt,
+      likes: b.likeCount,
+      score: Number(b.score.toFixed(4)),
+      matchedBy: b.matchedBy,
+      categories: b.categories.map((c) => c.slug),
+      text: b.text.length > 280 ? b.text.slice(0, 280) + '…' : b.text,
+    })),
   })
+}
+
+async function cmdIndex(args: string[]) {
+  const { flags } = parseArgs(args)
+  if (flags.status === 'true') {
+    output(await getEmbeddingStatus())
+    return
+  }
+  const written = await runIndex(null, flags.force === 'true')
+  output({ indexed: written, ...(await getEmbeddingStatus()) })
 }
 
 async function cmdList(args: string[]) {
@@ -263,8 +265,9 @@ function formatBookmark(b: any) {
 // ─── Router ──────────────────────────────────────────────────────────────────
 
 const COMMANDS: Record<string, string> = {
-  search: 'search <query>           FTS5 keyword search',
+  search: 'search <plain English>   Hybrid keyword + semantic search',
   list: 'list [--source] [--category] [--author] [--media] [--sort] [--limit] [--page]',
+  index: 'index [--force] [--status] Build local semantic vectors',
   show: 'show <id|tweetId>         Full bookmark detail',
   categories: 'categories                List categories with counts',
   stats: 'stats                     Library statistics',
@@ -285,6 +288,9 @@ async function main() {
 
   try {
     switch (command) {
+      case 'index':
+        await cmdIndex(rest)
+        break
       case 'search':
         await cmdSearch(rest)
         break

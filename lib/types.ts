@@ -20,10 +20,48 @@ export interface BookmarkWithMedia {
   text: string
   authorHandle: string
   authorName: string
+  source?: string
   tweetCreatedAt: string | null
   importedAt?: string
+  quotedText?: string | null
+  likeCount?: number | null
+  retweetCount?: number | null
+  replyCount?: number | null
+  viewCount?: number | null
   mediaItems: MediaItem[]
   categories: BookmarkCategory[]
+}
+
+export type MatchSource = 'keyword' | 'semantic' | 'filter'
+
+/** A bookmark returned by hybrid search, with ranking metadata. */
+export interface SearchHit extends BookmarkWithMedia {
+  score: number
+  matchedBy: MatchSource[]
+  /** Set by the "Ask AI" rerank */
+  aiReason?: string
+  aiScore?: number
+}
+
+export interface ParsedQueryInfo {
+  terms: string
+  author?: string
+  since?: string | null
+  until?: string | null
+  mediaType?: 'photo' | 'video'
+  category?: string
+  sort?: 'newest' | 'oldest' | 'popular'
+  filters: string[]
+}
+
+export interface SearchResponse {
+  bookmarks: SearchHit[]
+  total: number
+  parsed: ParsedQueryInfo
+  usedSemantic: boolean
+  tookMs: number
+  explanation?: string
+  aiUnavailable?: boolean
 }
 
 export interface Category {

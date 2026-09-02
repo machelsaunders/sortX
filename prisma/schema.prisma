@@ -21,13 +21,34 @@ model Bookmark {
   enrichedAt      DateTime? // when AI enrichment last ran — drives incremental processing
   enrichmentMeta  String?   // JSON: {sentiment, people[], companies[]} from batch enrichment
   source          String    @default("bookmark")  // "bookmark" | "like"
+  quotedText      String?   // text of the quoted tweet, if this bookmark is a quote tweet
+  likeCount       Int?
+  retweetCount    Int?
+  replyCount      Int?
+  viewCount       Int?
+  lang            String?
   mediaItems    MediaItem[]
   categories    BookmarkCategory[]
+  embedding     BookmarkEmbedding?
 
   @@index([authorHandle])
   @@index([tweetCreatedAt])
   @@index([enrichedAt])
   @@index([source])
+  @@index([likeCount])
+}
+
+/// Local semantic-search vector for a bookmark (see lib/embeddings.ts).
+/// `vector` is a little-endian Float32 array of length `dim`, L2-normalised.
+/// `docHash` identifies the document text that was embedded so stale rows can be re-embedded.
+model BookmarkEmbedding {
+  bookmarkId String   @id
+  model      String
+  dim        Int
+  vector     Bytes
+  docHash    String
+  updatedAt  DateTime @updatedAt
+  bookmark   Bookmark @relation(fields: [bookmarkId], references: [id], onDelete: Cascade)
 }
 
 model Category {

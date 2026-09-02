@@ -28,9 +28,9 @@ import {
 } from 'lucide-react'
 
 const ANTHROPIC_MODELS = [
-  { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', description: 'Fast & Cheap' },
-  { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6', description: 'Smart & Balanced' },
-  { value: 'claude-opus-4-6', label: 'Opus 4.6', description: 'Most Capable' },
+  { value: 'claude-haiku-4-5', label: 'Haiku 4.5', description: 'Fast & cheap — best for bulk runs' },
+  { value: 'claude-sonnet-5', label: 'Sonnet 5', description: 'Smart & balanced' },
+  { value: 'claude-opus-5', label: 'Opus 5', description: 'Most capable' },
 ]
 
 const OPENAI_MODELS = [
@@ -375,9 +375,9 @@ function ModelSelector({
           <span className="text-xs text-zinc-600 shrink-0 hidden sm:block">{selected.description}</span>
         )}
       </div>
-      {value === 'claude-opus-4-6' && (
+      {value === 'claude-opus-5' && (
         <p className="text-xs text-amber-500/80 mt-1.5">
-          Opus is slow with 20 parallel workers — consider Sonnet or Haiku for faster bulk categorization.
+          Opus is slower and pricier per bookmark — Haiku or Sonnet are usually plenty for bulk tagging.
         </p>
       )}
     </>
@@ -414,7 +414,7 @@ function ClaudeCliStatusBox() {
             Claude CLI detected — no API key needed
           </p>
           <p className="text-xs text-zinc-500 mt-0.5 leading-relaxed">
-            Signed in as <span className="text-zinc-300">{tier}</span> via Claude Code. Siftly will use your subscription automatically. An API key below will take priority if set.
+            Signed in as <span className="text-zinc-300">{tier}</span> via Claude Code. sortX will use your subscription automatically. An API key below will take priority if set.
           </p>
         </div>
       </div>
@@ -476,7 +476,7 @@ function CodexCliStatusBox() {
             {isChatGPT ? (
               <>Signed in as <span className="text-zinc-300">{tier}</span> via ChatGPT. AI features will use Codex CLI to proxy requests. An API key below will take priority if set.</>
             ) : (
-              <>Signed in as <span className="text-zinc-300">{tier}</span> via Codex CLI. Siftly will use your credentials automatically. An API key below will take priority if set.</>
+              <>Signed in as <span className="text-zinc-300">{tier}</span> via Codex CLI. sortX will use your credentials automatically. An API key below will take priority if set.</>
             )}
           </p>
         </div>
@@ -632,7 +632,7 @@ function ApiKeySection({ onToast }: { onToast: (t: Toast) => void }) {
               <ModelSelector
                 models={ANTHROPIC_MODELS}
                 settingKey="anthropicModel"
-                defaultValue="claude-haiku-4-5-20251001"
+                defaultValue="claude-haiku-4-5"
                 onToast={onToast}
               />
               <p className="text-xs text-zinc-500 mt-1.5">Applies to all AI operations — API key <strong className="text-zinc-400 font-medium">and Claude CLI</strong></p>
@@ -1081,9 +1081,9 @@ function AboutSection() {
   }
 
   return (
-    <Section icon={Info} title="About Siftly" description="Self-hosted Twitter bookmark manager">
+    <Section icon={Info} title="About sortX" description="Self-hosted Twitter bookmark manager">
       <p className="text-sm text-zinc-400 leading-relaxed mb-5">
-        <strong className="text-zinc-100 font-semibold">Siftly</strong> is a self-hosted app for
+        <strong className="text-zinc-100 font-semibold">sortX</strong> is a self-hosted app for
         organizing your Twitter/X bookmarks. Use the built-in bookmarklet or console script to import,
         then run the 4-stage AI pipeline to analyze images, extract entities, generate semantic tags, and
         auto-categorize — then explore connections through the interactive mindmap.
@@ -1113,7 +1113,7 @@ function AboutSection() {
             <span className="text-xs font-semibold text-amber-300">Support development</span>
           </div>
           <p className="text-[11px] text-zinc-500 mb-2.5 leading-relaxed">
-            If Siftly saves you time, consider leaving a tip
+            If sortX saves you time, consider leaving a tip
           </p>
           <button
             onClick={copyAddress}
@@ -1300,7 +1300,7 @@ export default function SettingsPage() {
       <div className="mb-8">
         <p className="text-xs text-zinc-500 uppercase tracking-widest font-medium mb-1">Configuration</p>
         <h1 className="text-2xl font-bold text-zinc-100">Settings</h1>
-        <p className="text-zinc-400 mt-1 text-sm">Configure your Siftly instance</p>
+        <p className="text-zinc-400 mt-1 text-sm">Configure your sortX instance</p>
       </div>
 
       {/* Toast */}

@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useRef, useEffect, useState } from 'react'
-import { ExternalLink, Download, FileText, Play, Pencil, X, Check, ImageOff, Bookmark, Globe } from 'lucide-react'
+import { ExternalLink, Download, FileText, Play, Pencil, X, Check, ImageOff, Bookmark, Globe, Heart, Repeat2 } from 'lucide-react'
 import type { BookmarkWithMedia, Category } from '@/lib/types'
 
 // ── URL helpers ────────────────────────────────────────────────────────────────
@@ -232,6 +232,12 @@ function getInitials(name: string): string {
   const parts = name.trim().split(/\s+/)
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
+
+function formatCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}K`
+  return String(n)
 }
 
 function formatDate(dateStr: string | null): string {
@@ -722,8 +728,18 @@ export default function BookmarkCard({ bookmark }: BookmarkCardProps) {
                   {bookmark.authorName}
                 </p>
               )}
-              <p className="text-xs text-zinc-500 truncate">
-                {isKnownAuthor ? `@${bookmark.authorHandle}` : dateStr}
+              <p className="text-xs text-zinc-500 truncate flex items-center gap-1.5">
+                <span className="truncate">{isKnownAuthor ? `@${bookmark.authorHandle}` : dateStr}</span>
+                {typeof bookmark.likeCount === 'number' && bookmark.likeCount > 0 && (
+                  <span className="inline-flex items-center gap-0.5 text-zinc-600 shrink-0" title={`${bookmark.likeCount.toLocaleString()} likes`}>
+                    <Heart size={10} />{formatCount(bookmark.likeCount)}
+                  </span>
+                )}
+                {typeof bookmark.retweetCount === 'number' && bookmark.retweetCount > 0 && (
+                  <span className="inline-flex items-center gap-0.5 text-zinc-600 shrink-0" title={`${bookmark.retweetCount.toLocaleString()} reposts`}>
+                    <Repeat2 size={11} />{formatCount(bookmark.retweetCount)}
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -760,6 +776,11 @@ export default function BookmarkCard({ bookmark }: BookmarkCardProps) {
 
         {/* Tweet text */}
         <div className={`flex-1 ${previewUrl && !displayText ? '' : 'min-h-[4.5rem]'}`}>
+          {bookmark.quotedText && (
+            <blockquote className="mb-2 pl-3 border-l-2 border-zinc-700 text-xs text-zinc-400 leading-relaxed line-clamp-3" title={bookmark.quotedText}>
+              {stripTcoUrls(bookmark.quotedText)}
+            </blockquote>
+          )}
           {displayText.length > 0 && (
             <p className="text-sm text-zinc-200 leading-relaxed">
               {displayText}

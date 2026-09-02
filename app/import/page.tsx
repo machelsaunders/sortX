@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react'
 import Link from 'next/link'
-import { Upload, CheckCircle, ChevronRight, Loader2, Copy, Check, ExternalLink, Sparkles, Eye, Tag, Brain, Layers, StopCircle, RefreshCw, Clock, KeyRound, Trash2, AlertCircle, User, LogOut } from 'lucide-react'
+import { Upload, CheckCircle, ChevronRight, Loader2, Copy, Check, ExternalLink, Sparkles, Eye, Tag, Brain, Layers, StopCircle, RefreshCw, Clock, KeyRound, Trash2, AlertCircle, User, LogOut, Database } from 'lucide-react'
 import * as Progress from '@radix-ui/react-progress'
 
 type Step = 1 | 2 | 3
@@ -15,13 +15,14 @@ interface ImportResult {
   parsed: number
 }
 
-type Stage = 'vision' | 'entities' | 'enrichment' | 'categorize' | 'parallel' | null
+type Stage = 'vision' | 'entities' | 'enrichment' | 'categorize' | 'parallel' | 'index' | null
 
 interface StageCounts {
   visionTagged: number
   entitiesExtracted: number
   enriched: number
   categorized: number
+  indexed: number
 }
 
 interface CategorizeStatus {
@@ -58,7 +59,12 @@ const STAGE_INFO: Record<NonNullable<Stage>, { label: string; icon: React.ReactN
   parallel: {
     label: 'Processing all stages in parallel',
     icon: <Sparkles size={14} />,
-    desc: 'Vision, enrichment, and categorization running concurrently across 20 workers',
+    desc: 'Vision, enrichment, and categorization running concurrently',
+  },
+  index: {
+    label: 'Indexing for search',
+    icon: <Database size={14} />,
+    desc: 'Refreshing the keyword index and computing local semantic vectors',
   },
 }
 
@@ -92,7 +98,12 @@ const BOOKMARKLET_SCRIPT = `(async function(){
   function addTweet(t){
     if(!t||!t.rest_id||seen.has(t.rest_id))return;
     seen.add(t.rest_id);
-    var leg=t.legacy||{},usr=(t.core&&t.core.user_results&&t.core.user_results.result&&t.core.user_results.result.legacy)||{};
+    var leg=t.legacy||{},ures=(t.core&&t.core.user_results&&t.core.user_results.result)||{},usr=ures.legacy||{},ucore=ures.core||{};
+    var noteText=t.note_tweet&&t.note_tweet.note_tweet_results&&t.note_tweet.note_tweet_results.result&&t.note_tweet.note_tweet_results.result.text;
+    var qr=t.quoted_status_result&&t.quoted_status_result.result;if(qr&&qr.tweet)qr=qr.tweet;
+    var quoted;
+    if(qr&&qr.legacy){var qres=(qr.core&&qr.core.user_results&&qr.core.user_results.result)||{};var qnote=qr.note_tweet&&qr.note_tweet.note_tweet_results&&qr.note_tweet.note_tweet_results.result&&qr.note_tweet.note_tweet_results.result.text;
+      quoted={text:qnote||qr.legacy.full_text||'',handle:(qres.legacy&&qres.legacy.screen_name)||(qres.core&&qres.core.screen_name)||''};}
     var rawMedia=(leg.extended_entities&&leg.extended_entities.media)||(leg.entities&&leg.entities.media)||[];
     var media=rawMedia.map(function(m){
       var thumb=m.media_url_https||'';
@@ -106,9 +117,10 @@ const BOOKMARKLET_SCRIPT = `(async function(){
       }
       return thumb?{type:'photo',url:thumb}:null;
     }).filter(Boolean);
-    all.push({id:t.rest_id,author:usr.name||'Unknown',handle:'@'+(usr.screen_name||'unknown'),
+    all.push({id:t.rest_id,author:usr.name||ucore.name||'Unknown',handle:'@'+(usr.screen_name||ucore.screen_name||'unknown'),
       avatar:usr.profile_image_url_https||'',timestamp:leg.created_at||'',
-      text:leg.full_text||leg.text||'',media:media,
+      text:noteText||leg.full_text||leg.text||'',media:media,
+      likes:leg.favorite_count,retweets:leg.retweet_count,replies:leg.reply_count,views:(t.views&&t.views.count)||undefined,lang:leg.lang,quoted:quoted,
       hashtags:(leg.entities&&leg.entities.hashtags||[]).map(function(h){return h.text;}),
       urls:(leg.entities&&leg.entities.urls||[]).map(function(u){return u.expanded_url;}).filter(Boolean)});
     btn.textContent='Export '+all.length+' '+label+' \u2192';
@@ -138,7 +150,7 @@ const BOOKMARKLET_SCRIPT = `(async function(){
     var url=URL.createObjectURL(blob);
     var a=document.createElement('a');a.href=url;a.download=source+'s.json';a.click();
     setTimeout(function(){URL.revokeObjectURL(url);},1000);
-    showToast('\u2705 Downloaded '+all.length+' '+label+'! Upload to Siftly.','#14532d');
+    showToast('\u2705 Downloaded '+all.length+' '+label+'! Upload to sortX.','#14532d');
   }
   btn.onclick=doExport;
   autoBtn.textContent='\u25b6 Auto-scroll';
@@ -217,7 +229,13 @@ const CONSOLE_SCRIPT = `(async function() {
   function addTweet(t) {
     if (!t?.rest_id || seen.has(t.rest_id)) return;
     seen.add(t.rest_id);
-    const leg = t.legacy ?? {}, usr = t.core?.user_results?.result?.legacy ?? {};
+    const leg = t.legacy ?? {}, ures = t.core?.user_results?.result ?? {}, usr = ures.legacy ?? {}, ucore = ures.core ?? {};
+    const noteText = t.note_tweet?.note_tweet_results?.result?.text;
+    let qr = t.quoted_status_result?.result; if (qr?.tweet) qr = qr.tweet;
+    const quoted = qr?.legacy ? {
+      text: qr.note_tweet?.note_tweet_results?.result?.text ?? qr.legacy.full_text ?? '',
+      handle: qr.core?.user_results?.result?.legacy?.screen_name ?? qr.core?.user_results?.result?.core?.screen_name ?? ''
+    } : undefined;
     const media = (leg.extended_entities?.media ?? leg.entities?.media ?? []).map(m => {
       const thumb = m.media_url_https ?? '';
       if (m.type === 'video' || m.type === 'animated_gif') {
@@ -230,8 +248,9 @@ const CONSOLE_SCRIPT = `(async function() {
       return thumb ? { type: 'photo', url: thumb } : null;
     }).filter(Boolean);
     all.push({
-      id: t.rest_id, author: usr.name ?? 'Unknown', handle: '@' + (usr.screen_name ?? 'unknown'),
-      timestamp: leg.created_at ?? '', text: leg.full_text ?? leg.text ?? '', media,
+      id: t.rest_id, author: usr.name ?? ucore.name ?? 'Unknown', handle: '@' + (usr.screen_name ?? ucore.screen_name ?? 'unknown'),
+      timestamp: leg.created_at ?? '', text: noteText ?? leg.full_text ?? leg.text ?? '', media,
+      likes: leg.favorite_count, retweets: leg.retweet_count, replies: leg.reply_count, views: t.views?.count, lang: leg.lang, quoted,
       hashtags: (leg.entities?.hashtags ?? []).map(h => h.text),
       urls: (leg.entities?.urls ?? []).map(u => u.expanded_url).filter(Boolean)
     });
@@ -828,7 +847,7 @@ function LiveImportTab({ onSynced }: { onSynced: (result: ImportResult) => void 
           {status.tokenExpired && (
             <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-500/8 border border-amber-500/20">
               <AlertCircle size={14} className="text-amber-400 shrink-0" />
-              <p className="text-xs text-amber-300">Token expired. Siftly will try to auto-refresh, or you can reconnect.</p>
+              <p className="text-xs text-amber-300">Token expired. sortX will try to auto-refresh, or you can reconnect.</p>
             </div>
           )}
 

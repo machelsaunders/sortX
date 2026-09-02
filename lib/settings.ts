@@ -15,13 +15,21 @@ let _miniMaxModelCacheExpiry = 0
 
 const CACHE_TTL = 5 * 60 * 1000
 
+export const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5'
+
+// Dated aliases saved by earlier versions map to the current model IDs
+const LEGACY_ANTHROPIC_MODELS: Record<string, string> = {
+  'claude-haiku-4-5-20251001': 'claude-haiku-4-5',
+}
+
 /**
  * Get the configured Anthropic model from settings (cached for 5 minutes).
  */
 export async function getAnthropicModel(): Promise<string> {
   if (_cachedModel && Date.now() < _modelCacheExpiry) return _cachedModel
   const setting = await prisma.setting.findUnique({ where: { key: 'anthropicModel' } })
-  _cachedModel = setting?.value ?? 'claude-haiku-4-5-20251001'
+  const raw = setting?.value ?? DEFAULT_ANTHROPIC_MODEL
+  _cachedModel = LEGACY_ANTHROPIC_MODELS[raw] ?? raw
   _modelCacheExpiry = Date.now() + CACHE_TTL
   return _cachedModel
 }

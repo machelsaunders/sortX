@@ -2,16 +2,17 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { Sparkles, Loader2, CheckCircle, ChevronRight, Eye, Tag, Brain, Layers, StopCircle } from 'lucide-react'
+import { Sparkles, Loader2, CheckCircle, ChevronRight, Eye, Tag, Brain, Layers, StopCircle , Database } from 'lucide-react'
 import * as Progress from '@radix-ui/react-progress'
 
-type Stage = 'vision' | 'entities' | 'enrichment' | 'categorize' | 'parallel' | null
+type Stage = 'vision' | 'entities' | 'enrichment' | 'categorize' | 'parallel' | 'index' | null
 
 interface StageCounts {
   visionTagged: number
   entitiesExtracted: number
   enriched: number
   categorized: number
+  indexed: number
 }
 
 interface CategorizeStatus {
@@ -48,7 +49,12 @@ const STAGE_INFO: Record<NonNullable<Stage>, { label: string; icon: React.ReactN
   parallel: {
     label: 'Processing all stages in parallel',
     icon: <Sparkles size={14} />,
-    desc: 'Vision, enrichment, and categorization running concurrently across 20 workers',
+    desc: 'Vision, enrichment, and categorization running concurrently',
+  },
+  index: {
+    label: 'Indexing for search',
+    icon: <Database size={14} />,
+    desc: 'Refreshing the keyword index and computing local semantic vectors',
   },
 }
 
@@ -141,7 +147,7 @@ export default function CategorizePage() {
         </div>
         <h1 className="text-2xl font-bold text-zinc-100">Categorize Bookmarks</h1>
         <p className="text-zinc-400 mt-1 text-sm">
-          4-stage AI pipeline: vision analysis → entity extraction → semantic tagging → categorization.
+          AI pipeline: entity extraction → vision analysis → semantic tagging → categorization → search indexing.
         </p>
       </div>
 
@@ -197,6 +203,7 @@ export default function CategorizePage() {
                   { key: 'entitiesExtracted', label: 'entities extracted', icon: <Tag size={13} />, active: status.stage === 'entities' },
                   { key: 'enriched', label: 'bookmarks enriched', icon: <Brain size={13} />, active: status.stage === 'enrichment' || status.stage === 'parallel' },
                   { key: 'categorized', label: 'categorized', icon: <Layers size={13} />, active: status.stage === 'categorize' || status.stage === 'parallel' },
+                  { key: 'indexed', label: 'indexed for search', icon: <Database size={13} />, active: status.stage === 'index' },
                 ].map(({ key, label, icon, active }) => {
                   const count = status.stageCounts[key as keyof StageCounts]
                   const total = key === 'categorized' ? status.total : null

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { BookmarkIcon, Tag, Image, Layers, Upload, Sparkles, Search, ArrowRight, TrendingUp, Bookmark } from 'lucide-react'
 import prisma from '@/lib/db'
 import BookmarkCard from '@/components/bookmark-card'
+import SearchHero from '@/components/search-hero'
 import type { BookmarkWithMedia } from '@/lib/types'
 
 const RECENT_QUERY = {
@@ -172,7 +173,7 @@ export default async function DashboardPage() {
             <p className="text-zinc-400 mt-1.5">
               You have{' '}
               <span className="text-zinc-100 font-semibold">{data.totalBookmarks.toLocaleString()}</span>{' '}
-              tweets saved and ready to explore.
+              posts saved, sorted, and searchable.
               {data.likeSourceCount > 0 && (
                 <span className="text-zinc-500">
                   {' '}({data.bookmarkSourceCount.toLocaleString()} bookmarks, {data.likeSourceCount.toLocaleString()} likes)
@@ -197,15 +198,18 @@ export default async function DashboardPage() {
               AI Categorize
             </Link>
             <Link
-              href="/ai-search"
+              href="/search"
               className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-xl transition-colors"
             >
               <Search size={15} />
-              AI Search
+              Search
             </Link>
           </div>
         </div>
       </div>
+
+      {/* Search */}
+      <SearchHero />
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

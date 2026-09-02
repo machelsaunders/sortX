@@ -1,4 +1,14 @@
-import prisma from '@/lib/db'
+/**
+ * Cookie-based X bookmark fetcher (auth_token + ct0) used by the scheduled
+ * sync in lib/x-sync.ts. Tweet parsing lives in lib/tweet-normalize.ts and
+ * database writes in lib/import-bookmarks.ts so every import path behaves
+ * the same way.
+ */
+import { importParsedBookmarks } from '@/lib/import-bookmarks'
+import { tweetResultToParsed, unwrapTweet, type TweetResult } from '@/lib/tweet-normalize'
+
+export type { TweetResult } from '@/lib/tweet-normalize'
+export { tweetFullText, extractMedia } from '@/lib/tweet-normalize'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -27,63 +37,9 @@ const FEATURES = JSON.stringify({
   responsive_web_enhance_cards_enabled: false,
 })
 
-// Query ID for Twitter's internal Bookmarks GraphQL endpoint
-// This can change when Twitter deploys updates — update if you get 400 errors
-const QUERY_ID = 'xLjCVTqYWz8CGSprLU349w'
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface MediaVariant {
-  content_type?: string
-  bitrate?: number
-  url?: string
-}
-
-interface MediaEntity {
-  type?: string
-  media_url_https?: string
-  video_info?: { variants?: MediaVariant[] }
-}
-
-interface TweetLegacy {
-  full_text?: string
-  created_at?: string
-  entities?: { hashtags?: unknown[]; urls?: unknown[]; media?: MediaEntity[] }
-  extended_entities?: { media?: MediaEntity[] }
-}
-
-interface UserLegacy {
-  screen_name?: string
-  name?: string
-}
-
-interface ArticleCoverMedia {
-  media_info?: { original_img_url?: string }
-}
-
-interface ArticleBlock {
-  text?: string
-  type?: string
-}
-
-interface ArticleResult {
-  title?: string
-  preview_image?: { url?: string }
-  cover_media?: ArticleCoverMedia
-  content?: string
-  // Some X article payloads include a Draft.js-like content_state
-  content_state?: { blocks?: ArticleBlock[] }
-}
-
-export interface TweetResult {
-  __typename?: string
-  rest_id?: string
-  legacy?: TweetLegacy
-  core?: { user_results?: { result?: { legacy?: UserLegacy } } }
-  note_tweet?: { note_tweet_results?: { result?: { text?: string } } }
-  article?: { article_results?: { result?: ArticleResult } }
-  tweet?: TweetResult
-}
+// Query ID for X's internal Bookmarks GraphQL endpoint.
+// It changes when X deploys — update if you get 400/404 errors. Override with X_BOOKMARKS_QUERY_ID.
+const QUERY_ID = process.env.X_BOOKMARKS_QUERY_ID ?? 'xLjCVTqYWz8CGSprLU349w'
 
 // ── Fetch + Parse ─────────────────────────────────────────────────────────────
 
@@ -124,173 +80,40 @@ export async function fetchPage(authToken: string, ct0: string, cursor?: string)
   }
 }
 
-export function parsePage(data: unknown): { tweets: TweetResult[]; nextCursor: string | null } {
-  const instructions =
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (data as any)?.data?.bookmark_timeline_v2?.timeline?.instructions ?? []
-
+/** Walk timeline instructions and pull out tweets + the bottom cursor. */
+export function parseTimeline(instructions: unknown[]): { tweets: TweetResult[]; nextCursor: string | null } {
   const tweets: TweetResult[] = []
   let nextCursor: string | null = null
 
-  for (const instruction of instructions) {
+  for (const instruction of instructions as Array<Record<string, unknown>>) {
     if (instruction.type !== 'TimelineAddEntries') continue
-    for (const entry of instruction.entries ?? []) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const entry of ((instruction as any).entries ?? []) as Array<Record<string, any>>) {
       const content = entry.content
       if (content?.entryType === 'TimelineTimelineItem') {
-        let tweet: TweetResult = content?.itemContent?.tweet_results?.result
-        if (tweet?.__typename === 'TweetWithVisibilityResults' && tweet.tweet) {
-          tweet = tweet.tweet
-        }
+        const tweet = unwrapTweet(content?.itemContent?.tweet_results?.result)
         if (tweet?.rest_id) tweets.push(tweet)
-      } else if (
-        content?.entryType === 'TimelineTimelineCursor' &&
-        content?.cursorType === 'Bottom'
-      ) {
+      } else if (content?.entryType === 'TimelineTimelineCursor' && content?.cursorType === 'Bottom') {
         nextCursor = content.value ?? null
       }
     }
   }
-
   return { tweets, nextCursor }
 }
 
-function bestVideoUrl(variants: MediaVariant[]): string | null {
-  const mp4 = variants
-    .filter((v) => v.content_type === 'video/mp4' && v.url)
-    .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0))
-  return mp4[0]?.url ?? null
-}
-
-export function extractMedia(tweet: TweetResult) {
-  const entities =
-    tweet.legacy?.extended_entities?.media ?? tweet.legacy?.entities?.media ?? []
-  const results = entities
-    .map((m) => {
-      const thumb = m.media_url_https ?? ''
-      if (m.type === 'video' || m.type === 'animated_gif') {
-        const url = bestVideoUrl(m.video_info?.variants ?? []) ?? thumb
-        if (!url) return null
-        return { type: m.type === 'animated_gif' ? 'gif' : 'video', url, thumbnailUrl: thumb }
-      }
-      if (!thumb) return null
-      return { type: 'photo' as const, url: thumb, thumbnailUrl: thumb }
-    })
-    .filter(Boolean) as { type: string; url: string; thumbnailUrl: string }[]
-
-  // If no media from entities, try article cover/preview image
-  if (results.length === 0) {
-    const article = tweet.article?.article_results?.result
-    const coverUrl =
-      article?.cover_media?.media_info?.original_img_url ??
-      article?.preview_image?.url
-    if (coverUrl) {
-      results.push({ type: 'photo', url: coverUrl, thumbnailUrl: coverUrl })
-    }
-  }
-
-  return results
-}
-
-function decodeHtmlEntities(text: string): string {
-  return text
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-}
-
-function articleBlocksText(article: ArticleResult): string {
-  const blocks = article.content_state?.blocks ?? []
-  const texts = blocks
-    .map((b) => (b.text ?? '').trim())
-    .filter(Boolean)
-    .slice(0, 8)
-  return texts.join('\n\n')
-}
-
-export function tweetFullText(tweet: TweetResult): string {
-  if (tweet.note_tweet?.note_tweet_results?.result?.text) {
-    return decodeHtmlEntities(tweet.note_tweet.note_tweet_results.result.text)
-  }
-
-  const article = tweet.article?.article_results?.result
-  if (article) {
-    const parts: string[] = []
-    if (article.title) parts.push(article.title)
-    if (article.content) parts.push(article.content)
-
-    // Fallback: some X articles ship content in content_state.blocks
-    if (parts.length === 0) {
-      const blocks = articleBlocksText(article)
-      if (blocks) parts.push(blocks)
-    }
-
-    if (parts.length > 0) return decodeHtmlEntities(parts.join('\n\n'))
-  }
-
-  return decodeHtmlEntities(tweet.legacy?.full_text ?? '')
+export function parsePage(data: unknown): { tweets: TweetResult[]; nextCursor: string | null } {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const instructions = (data as any)?.data?.bookmark_timeline_v2?.timeline?.instructions ?? []
+  return parseTimeline(instructions)
 }
 
 // ── Import tweets to DB ───────────────────────────────────────────────────────
 
 export async function importTweets(
   tweets: TweetResult[],
+  source: 'bookmark' | 'like' = 'bookmark',
 ): Promise<{ imported: number; skipped: number }> {
-  let imported = 0
-  let skipped = 0
-
-  for (const tweet of tweets) {
-    if (!tweet.rest_id) continue
-
-    try {
-      const exists = await prisma.bookmark.findUnique({
-        where: { tweetId: tweet.rest_id },
-        select: { id: true },
-      })
-
-      if (exists) {
-        skipped++
-        continue
-      }
-
-      const media = extractMedia(tweet)
-      const userLegacy = tweet.core?.user_results?.result?.legacy ?? {}
-
-      const rawDate = tweet.legacy?.created_at
-      let parsedDate: Date | null = null
-      if (rawDate) {
-        const d = new Date(rawDate)
-        if (!isNaN(d.getTime())) parsedDate = d
-      }
-
-      const created = await prisma.bookmark.create({
-        data: {
-          tweetId: tweet.rest_id,
-          text: tweetFullText(tweet),
-          authorHandle: userLegacy.screen_name ?? 'unknown',
-          authorName: userLegacy.name ?? 'Unknown',
-          tweetCreatedAt: parsedDate,
-          rawJson: JSON.stringify(tweet),
-        },
-      })
-
-      if (media.length > 0) {
-        await prisma.mediaItem.createMany({
-          data: media.map((m) => ({
-            bookmarkId: created.id,
-            type: m.type,
-            url: m.url,
-            thumbnailUrl: m.thumbnailUrl ?? null,
-          })),
-        })
-      }
-
-      imported++
-    } catch (err) {
-      console.error(`[twitter-api] Failed to import tweet ${tweet.rest_id}:`, err instanceof Error ? err.message : err)
-    }
-  }
-
-  return { imported, skipped }
+  const parsed = tweets.map(tweetResultToParsed).filter((b): b is NonNullable<typeof b> => b !== null)
+  const result = await importParsedBookmarks(parsed, source)
+  return { imported: result.imported, skipped: result.skipped }
 }

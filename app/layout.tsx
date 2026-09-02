@@ -1,4 +1,4 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
 import Nav from '@/components/nav'
@@ -11,8 +11,15 @@ const inter = Inter({
 })
 
 export const metadata: Metadata = {
-  title: 'Siftly',
-  description: 'Your Twitter bookmarks, organized and searchable.',
+  title: 'sortX',
+  description: 'Your X bookmarks, sorted, categorized, and searchable in plain English.',
+  icons: { icon: '/icon.svg' },
+}
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  themeColor: '#09090b',
 }
 
 export default function RootLayout({
@@ -26,7 +33,7 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: `(function(){try{var t=localStorage.getItem('theme');if(t==='light')document.documentElement.classList.add('light');}catch(e){}})()` }} />
       </head>
-      <body className="flex min-h-screen bg-zinc-950 text-zinc-100 antialiased">
+      <body className="flex flex-col md:flex-row min-h-screen bg-zinc-950 text-zinc-100 antialiased">
         <Nav />
         <main className="flex-1 min-w-0 overflow-auto">
           {children}

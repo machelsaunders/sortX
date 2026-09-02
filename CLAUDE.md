@@ -1,117 +1,68 @@
-# Siftly
+# sortX
 
-Self-hosted Twitter/X bookmark manager with AI-powered categorization, search, and visualization.
+Self-hosted X/Twitter bookmark manager: import → AI categorize → plain-English hybrid search. Fork of Siftly (viperrcrypto/Siftly); upstream remote is `upstream`, this repo is `origin` (machelsaunders/sortX), working branch `sortx`.
 
 ## Quick Setup
 
 ```bash
-./start.sh            # installs deps, sets up DB, opens browser
+./start.sh            # installs deps, migrates DB, opens browser
 ```
 
-Or manually:
-
-```bash
-npm install
-npx prisma generate && npx prisma db push
-npx next dev
-```
-
-App runs at **http://localhost:3000**
+Manual: `npm install && npx prisma generate && npx prisma migrate deploy && npx next dev` → http://localhost:3000
 
 ## AI Authentication — No API Key Needed
 
-If the user is signed into Claude Code CLI, **Siftly uses their Claude subscription automatically**. No API key configuration required.
+If the user is signed into Claude Code CLI, the app uses that subscription automatically (`lib/claude-cli-auth.ts` reads the OAuth token from the macOS keychain; text tasks prefer `claude -p` via `lib/claude-cli.ts`). Fallbacks: DB-saved API key → `ANTHROPIC_API_KEY` → `ANTHROPIC_BASE_URL` proxy. Check with `GET /api/settings/cli-status`.
 
-How it works:
-- `lib/claude-cli-auth.ts` reads the OAuth token from the macOS keychain (`Claude Code-credentials`)
-- Uses `authToken` + `anthropic-beta: oauth-2025-04-20` header in the Anthropic SDK
-- Falls back to: DB-saved API key → `ANTHROPIC_API_KEY` env var → local proxy
-
-To verify it's working, hit: `GET /api/settings/cli-status`
+Semantic search needs **no AI provider**: `lib/embeddings.ts` runs `Xenova/bge-small-en-v1.5` locally via transformers.js (downloaded once to `.cache/models`).
 
 ## Key Commands
 
 ```bash
-npx next dev          # Start dev server (port 3000)
-npx tsc --noEmit      # Type check
-npx prisma studio     # Database GUI
-npx prisma db push    # Apply schema changes to DB
-npm run build         # Production build
+npx next dev              # dev server
+npm run typecheck         # tsc --noEmit
+npm test                  # vitest (parser, query parser, ranking, tweet normalize)
+npx prisma migrate dev --name <change>   # after editing schema.prisma
+npx prisma studio
+npm run build
+npx tsx cli/siftly.ts search "memes about ai last month"
+npx tsx cli/siftly.ts index --status
 ```
+
+## How search works
+
+1. `lib/query-parser.ts` (pure) turns the sentence into `terms` + filters: author, since/until, mediaType, category, sort. Filler like "show me that thread about" is stripped.
+2. `lib/hybrid-search.ts` runs `ftsSearch` (FTS5, `bookmark_fts_v2`, BM25 column weights) and `vectorSearch` (brute-force cosine over `BookmarkEmbedding` rows, cached in memory) in parallel, fuses with RRF (`lib/rank.ts`), applies filters via Prisma, hydrates with `lib/serialize-bookmark.ts`.
+3. `GET /api/search` returns that instantly. `POST /api/search/ai` takes the top 40 hybrid hits and asks the configured model to rerank + explain.
+4. Indexing: `lib/import-bookmarks.ts` upserts FTS rows and schedules embeddings for new posts; the categorize pipeline ends with an `index` stage (`rebuildFts` + `embedBookmarks`); `POST /api/search/index` rebuilds on demand. Vectors are re-computed only when the document hash changes.
 
 ## Project Structure
 
 ```
 app/
-  api/
-    categorize/       # 4-stage AI pipeline (start/stop/status via SSE)
-    import/           # Bookmark JSON import + dedup
-    search/ai/        # FTS5 + Claude semantic search
-    settings/
-      cli-status/     # GET — returns Claude CLI auth status
-      test/           # POST — validates API key or CLI auth
-    analyze/images/   # Vision analysis progress + trigger
-    bookmarks/        # CRUD + filtering
-    categories/       # Category management
-    mindmap/          # Graph data
-    stats/            # Dashboard counts
-  import/             # 3-step import UI
-  mindmap/            # Interactive force graph
-  settings/           # API keys, model selection
-  ai-search/          # Natural language search UI
-  bookmarks/          # Browse + filter UI
-  categorize/         # Pipeline monitor
-
+  search/               unified search page (replaces /ai-search, which redirects)
+  api/search/           route.ts (hybrid), ai/route.ts (rerank), index/route.ts (vectors)
+  api/import/           route.ts (JSON), bookmarklet/, twitter/ (cookie), live/ (scheduled), x-oauth/
+  api/categorize/       pipeline: entities → parallel(vision, tags, categorize) → index
+  api/bookmarks/        list/filter (q, author, category, mediaType, source, sort=newest|oldest|popular)
+  import/ bookmarks/ categories/ categorize/ mindmap/ settings/ page.tsx
+components/
+  nav.tsx               sidebar on md+, top bar + drawer below md
+  search-hero.tsx       dashboard search box
+  command-palette.tsx   Cmd+K → /api/search
 lib/
-  claude-cli-auth.ts  # Claude CLI OAuth session (macOS keychain)
-  categorizer.ts      # AI categorization + default categories
-  vision-analyzer.ts  # Image vision + semantic tagging
-  fts.ts              # SQLite FTS5 full-text search
-  rawjson-extractor.ts # Entity extraction from tweet JSON
-  parser.ts           # Multi-format bookmark JSON parser
-  exporter.ts         # CSV / JSON / ZIP export
-
-prisma/schema.prisma  # SQLite schema (Bookmark, Category, MediaItem, Setting, ImportJob)
+  query-parser.ts hybrid-search.ts embeddings.ts fts.ts rank.ts
+  tweet-normalize.ts parser.ts import-bookmarks.ts serialize-bookmark.ts
+  categorizer.ts vision-analyzer.ts rawjson-extractor.ts twitter-api.ts x-sync.ts
+  ai-client.ts settings.ts claude-cli*.ts openai-auth.ts minimax-auth.ts codex-cli.ts
+prisma/schema.prisma    Bookmark (+quotedText, like/retweet/reply/view counts, lang), BookmarkEmbedding, Category, BookmarkCategory, MediaItem, ImportJob, Setting
 ```
 
-## Tech Stack
+## Conventions
 
-- **Next.js 16** (App Router, TypeScript)
-- **Prisma 7** + **SQLite** (local, zero setup, FTS5 built in)
-- **Anthropic SDK** — vision, tagging, categorization, search
-- **@xyflow/react** — mindmap graph
-- **Tailwind CSS v4**
-
-## Environment Variables
-
-See `.env.example` for the full list. Only `DATABASE_URL` is required (defaults to `file:./prisma/dev.db`).
-
-## CLI for AI Agents
-
-`cli/siftly.ts` provides direct database access without the Next.js server. Outputs JSON (pretty-printed on TTY, compact when piped). Must run from project root.
-
-```bash
-npx tsx cli/siftly.ts stats                          # Library statistics
-npx tsx cli/siftly.ts categories                     # Categories with counts
-npx tsx cli/siftly.ts search "AI agents"             # FTS5 keyword search
-npx tsx cli/siftly.ts list --limit 5                 # Recent bookmarks
-npx tsx cli/siftly.ts list --source like --category ai-resources --sort oldest
-npx tsx cli/siftly.ts show <id|tweetId>              # Full bookmark detail
-npm run siftly -- stats                              # Alternative via npm script
-```
-
-## Common Tasks
-
-| Task | How |
-|------|-----|
-| Run AI pipeline | `POST /api/categorize` with `{}` body; `GET /api/categorize` for SSE progress |
-| Add category | Edit `DEFAULT_CATEGORIES` in `lib/categorizer.ts` — description is passed verbatim to Claude |
-| Add known tool | Append domain to `KNOWN_TOOL_DOMAINS` in `lib/rawjson-extractor.ts` |
-| Test API auth | `POST /api/settings/test` with `{"provider":"anthropic"}` |
-| Check CLI auth | `GET /api/settings/cli-status` |
-
-## Database
-
-SQLite at `prisma/dev.db`. After schema changes: `npx prisma db push`
-
-Models: `Bookmark`, `MediaItem`, `BookmarkCategory`, `Category`, `Setting`, `ImportJob` — see `prisma/schema.prisma` for details.
+- Every import path must go through `importParsedBookmarks()` — it dedupes, writes media, extracts entities, and indexes.
+- Pure modules (`query-parser`, `rank`, `parser`, `tweet-normalize`) must not import `@/lib/db` so they stay unit-testable.
+- Model IDs: `claude-haiku-4-5` (default), `claude-sonnet-5`, `claude-opus-5`. Legacy dated IDs are normalised in `lib/settings.ts`.
+- FTS5 table is `bookmark_fts_v2`, created at runtime by `ensureFtsTable()`; the old `bookmark_fts` is dropped automatically.
+- Add a known tool: `KNOWN_TOOL_DOMAINS` in `lib/rawjson-extractor.ts`. Add a default category: `DEFAULT_CATEGORIES` in `lib/categorizer.ts`.
+- No AI attribution in commits.

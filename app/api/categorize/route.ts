@@ -17,8 +17,9 @@ import {
 } from '@/lib/vision-analyzer'
 import { backfillEntities } from '@/lib/rawjson-extractor'
 import { rebuildFts } from '@/lib/fts'
+import { embedBookmarks } from '@/lib/embeddings'
 
-type Stage = 'vision' | 'entities' | 'enrichment' | 'categorize' | 'parallel'
+type Stage = 'vision' | 'entities' | 'enrichment' | 'categorize' | 'parallel' | 'index'
 
 interface CategorizationState {
   status: 'idle' | 'running' | 'stopping'
@@ -30,6 +31,7 @@ interface CategorizationState {
     entitiesExtracted: number
     enriched: number
     categorized: number
+    indexed: number
   }
   lastError: string | null
   error: string | null
@@ -47,7 +49,7 @@ if (!globalState.categorizationState) {
     stage: null,
     done: 0,
     total: 0,
-    stageCounts: { visionTagged: 0, entitiesExtracted: 0, enriched: 0, categorized: 0 },
+    stageCounts: { visionTagged: 0, entitiesExtracted: 0, enriched: 0, categorized: 0, indexed: 0 },
     lastError: null,
     error: null,
   }
@@ -139,7 +141,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     stage: 'entities',
     done: 0,
     total,
-    stageCounts: { visionTagged: 0, entitiesExtracted: 0, enriched: 0, categorized: 0 },
+    stageCounts: { visionTagged: 0, entitiesExtracted: 0, enriched: 0, categorized: 0, indexed: 0 },
     lastError: null,
     error: null,
   })
@@ -150,7 +152,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     (await prisma.setting.findUnique({ where: { key: keyName } }))?.value?.trim() || ''
 
   void (async () => {
-    const counts = { visionTagged: 0, entitiesExtracted: 0, enriched: 0, categorized: 0 }
+    const counts = { visionTagged: 0, entitiesExtracted: 0, enriched: 0, categorized: 0, indexed: 0 }
 
     try {
       let client: AIClient | null = null
@@ -364,8 +366,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       setState({ lastError: err instanceof Error ? err.message.slice(0, 200) : String(err) })
     }
 
+    // Final stage: refresh the keyword index and re-embed anything whose
+    // text/tags/categories changed so semantic search reflects the new data.
     if (!shouldAbort()) {
+      setState({ stage: 'index', done: 0, total: 0 })
       await rebuildFts().catch((err) => console.error('FTS rebuild error:', err))
+      try {
+        counts.indexed = await embedBookmarks(null, {
+          onProgress: (done, total) => setState({ done, total, stageCounts: { ...counts } }),
+          shouldAbort,
+        })
+        setState({ stageCounts: { ...counts } })
+      } catch (err) {
+        console.error('Embedding index error:', err)
+        setState({ lastError: `Semantic index: ${err instanceof Error ? err.message.slice(0, 160) : String(err)}` })
+      }
     }
   })()
     .then(() => {

@@ -10,6 +10,10 @@ function maskKey(raw: string | null): string | null {
 }
 
 const ALLOWED_ANTHROPIC_MODELS = [
+  'claude-haiku-4-5',
+  'claude-sonnet-5',
+  'claude-opus-5',
+  // still accepted so existing databases keep working
   'claude-haiku-4-5-20251001',
   'claude-sonnet-4-6',
   'claude-opus-4-6',
@@ -48,7 +52,7 @@ export async function GET(): Promise<NextResponse> {
       provider: provider?.value ?? 'anthropic',
       anthropicApiKey: maskKey(anthropic?.value ?? null),
       hasAnthropicKey: anthropic !== null,
-      anthropicModel: anthropicModel?.value ?? 'claude-haiku-4-5-20251001',
+      anthropicModel: anthropicModel?.value ?? 'claude-haiku-4-5',
       openaiApiKey: maskKey(openai?.value ?? null),
       hasOpenaiKey: openai !== null,
       openaiModel: openaiModel?.value ?? 'gpt-4.1-mini',

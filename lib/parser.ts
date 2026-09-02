@@ -13,6 +13,13 @@ export interface ParsedBookmark {
   hashtags: string[]
   urls: string[]
   media: ParsedMedia[]
+  /** "@handle: text" of the quoted tweet, when this is a quote tweet */
+  quotedText: string | null
+  likeCount: number | null
+  retweetCount: number | null
+  replyCount: number | null
+  viewCount: number | null
+  lang: string | null
   rawJson: string
 }
 
@@ -62,7 +69,28 @@ interface RawTweet {
   extended_entities?: {
     media?: TwitterMediaEntity[]
   }
+  favorite_count?: number | string
+  retweet_count?: number | string
+  reply_count?: number | string
+  view_count?: number | string
+  lang?: string
+  quoted_status?: RawTweet
   [key: string]: unknown
+}
+
+function toInt(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return Math.trunc(v)
+  if (typeof v === 'string' && /^\d+$/.test(v)) return parseInt(v, 10)
+  return null
+}
+
+function extractQuotedText(tweet: RawTweet): string | null {
+  const q = tweet.quoted_status
+  if (!q) return null
+  const text = (q.full_text ?? q.text ?? '').trim()
+  if (!text) return null
+  const handle = q.user?.screen_name
+  return handle ? `@${handle}: ${text}` : text
 }
 
 function extractTweetId(tweet: RawTweet): string | null {
@@ -157,6 +185,12 @@ function parseSingleTweet(tweet: RawTweet): ParsedBookmark | null {
     hashtags: extractHashtags(tweet),
     urls: extractUrls(tweet),
     media: extractMedia(tweet),
+    quotedText: extractQuotedText(tweet),
+    likeCount: toInt(tweet.favorite_count),
+    retweetCount: toInt(tweet.retweet_count),
+    replyCount: toInt(tweet.reply_count),
+    viewCount: toInt(tweet.view_count),
+    lang: typeof tweet.lang === 'string' ? tweet.lang : null,
     rawJson: JSON.stringify(tweet),
   }
 }
@@ -213,6 +247,13 @@ interface ConsoleExportBookmark {
   media?: { type?: string; url?: string }[]
   hashtags?: string[]
   urls?: string[]
+  // Added by the sortX bookmarklet/console script
+  likes?: number
+  retweets?: number
+  replies?: number
+  views?: number | string
+  lang?: string
+  quoted?: { text?: string; handle?: string }
 }
 
 function isConsoleExportFormat(obj: unknown): obj is { bookmarks: ConsoleExportBookmark[] } {
@@ -248,6 +289,14 @@ function convertConsoleExportRow(row: ConsoleExportBookmark): RawTweet {
       media: mediaEntities.length > 0 ? mediaEntities : undefined,
     },
     extended_entities: mediaEntities.length > 0 ? { media: mediaEntities } : undefined,
+    favorite_count: row.likes,
+    retweet_count: row.retweets,
+    reply_count: row.replies,
+    view_count: row.views,
+    lang: row.lang,
+    quoted_status: row.quoted?.text
+      ? { full_text: row.quoted.text, user: { screen_name: (row.quoted.handle ?? '').replace(/^@/, '') || undefined } }
+      : undefined,
   }
 }
 
@@ -258,6 +307,12 @@ interface SiftlyExportItem {
   authorName?: string
   tweetCreatedAt?: string
   mediaItems?: { type?: string; url?: string; thumbnailUrl?: string }[]
+  quotedText?: string | null
+  likeCount?: number | null
+  retweetCount?: number | null
+  replyCount?: number | null
+  viewCount?: number | null
+  lang?: string | null
   [key: string]: unknown
 }
 
@@ -284,6 +339,12 @@ function convertSiftlyExportRow(row: SiftlyExportItem): RawTweet {
     user: { screen_name: row.authorHandle || 'unknown', name: row.authorName || 'Unknown' },
     entities: { media: mediaEntities.length > 0 ? mediaEntities : undefined },
     extended_entities: mediaEntities.length > 0 ? { media: mediaEntities } : undefined,
+    favorite_count: row.likeCount ?? undefined,
+    retweet_count: row.retweetCount ?? undefined,
+    reply_count: row.replyCount ?? undefined,
+    view_count: row.viewCount ?? undefined,
+    lang: row.lang ?? undefined,
+    quoted_status: row.quotedText ? { full_text: row.quotedText.replace(/^@[a-z0-9_]+:\s*/i, ''), user: { screen_name: row.quotedText.match(/^@([a-z0-9_]+):/i)?.[1] } } : undefined,
   }
 }
 

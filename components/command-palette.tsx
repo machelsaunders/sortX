@@ -3,16 +3,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Search, X, ArrowRight, Loader2 } from 'lucide-react'
-import type { BookmarkWithMedia } from '@/lib/types'
-
-interface SearchResult extends BookmarkWithMedia {
-  total?: number
-}
+import type { BookmarkWithMedia, SearchHit, SearchResponse } from '@/lib/types'
 
 export default function CommandPalette() {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<BookmarkWithMedia[]>([])
+  const [results, setResults] = useState<SearchHit[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState(0)
@@ -51,8 +47,8 @@ export default function CommandPalette() {
     }
     setLoading(true)
     try {
-      const res = await fetch(`/api/bookmarks?q=${encodeURIComponent(q)}&limit=8&sort=newest`)
-      const data = await res.json() as { bookmarks: BookmarkWithMedia[]; total: number }
+      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=8&typing=1`)
+      const data = await res.json() as SearchResponse
       setResults(data.bookmarks ?? [])
       setTotal(data.total ?? 0)
       setSelected(0)
@@ -81,12 +77,11 @@ export default function CommandPalette() {
       if (selected === results.length || results.length === 0) {
         // "See all results" option
         if (query.trim()) {
-          router.push(`/bookmarks?q=${encodeURIComponent(query.trim())}`)
+          router.push(`/search?q=${encodeURIComponent(query.trim())}`)
           setOpen(false)
         }
       } else if (results[selected]) {
-        router.push(`/bookmarks?q=${encodeURIComponent(query.trim())}`)
-        setOpen(false)
+        openBookmarkUrl(results[selected])
       }
     }
   }
@@ -123,7 +118,7 @@ export default function CommandPalette() {
               value={query}
               onChange={(e) => handleInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Search bookmarks by keyword…"
+              placeholder="Search in plain English… (e.g. memes about AI from last month)"
               className="flex-1 bg-transparent text-zinc-100 placeholder:text-zinc-500 text-sm focus:outline-none"
             />
             {query && (
@@ -170,7 +165,7 @@ export default function CommandPalette() {
                           {b.text.slice(0, 100) || 'No text'}
                         </p>
                         <p className="text-xs text-zinc-500 mt-0.5 truncate">
-                          {b.categories[0]?.name ?? 'Uncategorized'}
+                          @{b.authorHandle} · {b.categories[0]?.name ?? 'Uncategorized'}
                           {b.tweetCreatedAt && (
                             <span className="ml-2 opacity-60">
                               {new Date(b.tweetCreatedAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
@@ -186,14 +181,14 @@ export default function CommandPalette() {
               })}
 
               {/* See all results row */}
-              {total > results.length && (
+              {query.trim() && (
                 <li>
                   <button
                     className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
                       selected === results.length ? 'bg-zinc-800 text-indigo-400' : 'text-zinc-500 hover:bg-zinc-800/60 hover:text-zinc-300'
                     }`}
                     onClick={() => {
-                      router.push(`/bookmarks?q=${encodeURIComponent(query.trim())}`)
+                      router.push(`/search?q=${encodeURIComponent(query.trim())}`)
                       setOpen(false)
                     }}
                     onMouseEnter={() => setSelected(results.length)}

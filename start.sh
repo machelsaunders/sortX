@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-# ── Siftly Launcher ───────────────────────────────────────────────────────────
-# Run this once to set up and start Siftly.
+# ── sortX Launcher ───────────────────────────────────────────────────────────
+# Run this once to set up and start sortX.
 # After first run, just run it again to start the app.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -12,8 +12,8 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo ""
-echo -e "${BLUE}  Siftly${NC}"
-echo "  AI-powered bookmark manager"
+echo -e "${BLUE}  sortX${NC}"
+echo "  Your X bookmarks, sorted, categorized, searchable"
 echo ""
 
 # ── 1. Create .env if missing ────────────────────────────────────────────────

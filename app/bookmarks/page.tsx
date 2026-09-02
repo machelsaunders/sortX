@@ -277,6 +277,7 @@ function BookmarksPageInner() {
   const sortOptions = [
     { label: 'Newest first', value: 'newest' },
     { label: 'Oldest first', value: 'oldest' },
+    { label: 'Most liked', value: 'popular' },
   ]
 
   const hasActiveFilters = !!(filters.q || filters.category || filters.mediaType || filters.source || filters.sort !== 'newest' || filters.uncategorized)
@@ -329,7 +330,7 @@ function BookmarksPageInner() {
 
             {/* Sort */}
             <button
-              onClick={() => updateFilter('sort', filters.sort === 'newest' ? 'oldest' : 'newest')}
+              onClick={() => updateFilter('sort', filters.sort === 'newest' ? 'oldest' : filters.sort === 'oldest' ? 'popular' : 'newest')}
               className="flex items-center gap-2 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-sm text-zinc-400 hover:border-zinc-700 hover:text-zinc-200 transition-all shrink-0"
               title={`Sort: ${sortLabel}`}
             >
