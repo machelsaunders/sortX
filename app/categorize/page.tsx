@@ -23,6 +23,7 @@ interface CategorizeStatus {
   stageCounts: StageCounts
   lastError: string | null
   error: string | null
+  startedAt?: string | null
 }
 
 const STAGE_INFO: Record<NonNullable<Stage>, { label: string; icon: React.ReactNode; desc: string }> = {
@@ -246,7 +247,16 @@ export default function CategorizePage() {
             {(status?.stage === 'categorize' || status?.stage === 'parallel') && (
               <div className="space-y-2">
                 <div className="flex justify-between text-xs text-zinc-500">
-                  <span>{status.done} / {status.total} bookmarks</span>
+                  <span>
+                  {status.done} / {status.total} bookmarks
+                  {(() => {
+                    if (!status.startedAt || status.done < 5) return null
+                    const mins = (Date.now() - new Date(status.startedAt).getTime()) / 60000
+                    const rate = status.done / Math.max(mins, 0.1)
+                    const left = (status.total - status.done) / Math.max(rate, 0.01)
+                    return <span className="text-zinc-600"> · {Math.round(rate)}/min · ~{left < 60 ? `${Math.ceil(left)} min` : `${(left / 60).toFixed(1)} h`} left</span>
+                  })()}
+                </span>
                   <span>{progress}%</span>
                 </div>
                 <Progress.Root className="relative h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">

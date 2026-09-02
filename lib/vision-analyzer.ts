@@ -395,55 +395,46 @@ export async function enrichBatchSemanticTags(
     })).filter((r) => r.id)
   }
 
-  // Prefer CLI over SDK
+  const model = await getActiveModel()
+
+  // SDK first (one HTTP call per batch); CLI is the fallback for setups without SDK auth.
+  if (client) {
+    const ENRICH_RETRY_DELAYS = [2000, 5000]
+    for (let attempt = 0; attempt <= ENRICH_RETRY_DELAYS.length; attempt++) {
+      try {
+        const response = await client.createMessage({
+          model,
+          max_tokens: 8192,
+          messages: [{ role: 'user', content: prompt }],
+        })
+        const results = parseResponse(response.text)
+        if (results.length > 0) return results
+        console.warn(`[enrich] no JSON array in response (attempt ${attempt + 1})`)
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        console.warn(`[enrich] batch failed (attempt ${attempt + 1}): ${errMsg.slice(0, 120)}`)
+        const isClientError = errMsg.includes('400') || errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('422')
+        if (isClientError || attempt >= ENRICH_RETRY_DELAYS.length) break
+        await new Promise((r) => setTimeout(r, ENRICH_RETRY_DELAYS[attempt]))
+      }
+    }
+  }
+
   if (provider === 'openai') {
     if (await getCodexCliAvailability()) {
       const result = await codexPrompt(prompt, { timeoutMs: 90_000 })
       if (result.success && result.data) {
-        try { return parseResponse(result.data) }
-        catch { console.warn('[enrich] Codex CLI response parse failed, falling back to SDK') }
+        try { return parseResponse(result.data) } catch { console.warn('[enrich] Codex CLI response parse failed') }
       }
     }
-  } else {
-    if (await getCliAvailability()) {
-      const model = await getActiveModel()
-      const cliModel = modelNameToCliAlias(model)
-
-      const result = await claudePrompt(prompt, { model: cliModel, timeoutMs: 90_000 })
-      if (result.success && result.data) {
-        try { return parseResponse(result.data) }
-        catch { console.warn('[enrich] CLI response parse failed, falling back to SDK') }
-      }
+  } else if (await getCliAvailability()) {
+    const result = await claudePrompt(prompt, { model: modelNameToCliAlias(model), timeoutMs: 90_000 })
+    if (result.success && result.data) {
+      try { return parseResponse(result.data) } catch { console.warn('[enrich] CLI response parse failed') }
     }
   }
 
-  // Fallback to SDK
-  if (!client) {
-    console.warn('[enrich] CLI not available and no API client')
-    return []
-  }
-
-  const model = await getActiveModel()
-  const ENRICH_RETRY_DELAYS = [2000, 5000]
-
-  for (let attempt = 0; attempt <= ENRICH_RETRY_DELAYS.length; attempt++) {
-    try {
-      const response = await client.createMessage({
-        model,
-        max_tokens: 4096,
-        messages: [{ role: 'user', content: prompt }],
-      })
-      const results = parseResponse(response.text)
-      if (results.length > 0) return results
-      console.warn(`[enrich] no JSON array in response (attempt ${attempt + 1})`)
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      console.warn(`[enrich] batch failed (attempt ${attempt + 1}): ${errMsg.slice(0, 120)}`)
-      const isClientError = errMsg.includes('400') || errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('422')
-      if (isClientError || attempt >= ENRICH_RETRY_DELAYS.length) break
-      await new Promise((r) => setTimeout(r, ENRICH_RETRY_DELAYS[attempt]))
-    }
-  }
+  if (!client) console.warn('[enrich] CLI not available and no API client')
   return []
 }
 

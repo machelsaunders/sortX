@@ -240,54 +240,37 @@ export async function categorizeBatch(
 
   const prompt = buildCategorizationPrompt(bookmarks, categoryDescriptions, allSlugs)
   const provider = await getProvider()
+  const model = await getActiveModel()
 
-  // Prefer CLI over SDK (avoids OAuth token extraction, uses CLI directly)
+  // SDK first: one HTTP call, no process spawn, ~1s on Haiku. The CLI path
+  // (claude -p / codex exec) is the fallback for setups without SDK auth.
+  if (client) {
+    try {
+      const response = await client.createMessage({
+        model,
+        max_tokens: 4096,
+        messages: [{ role: 'user', content: prompt }],
+      })
+      if (!response.text) throw new Error('No text content in AI response')
+      return parseCategorizationResponse(response.text, new Set(allSlugs))
+    } catch (err) {
+      console.warn('[categorize] SDK call failed, trying CLI:', err instanceof Error ? err.message.slice(0, 160) : err)
+    }
+  }
+
   if (provider === 'openai') {
     if (await getCodexCliAvailability()) {
       const result = await codexPrompt(prompt, { timeoutMs: 60_000 })
-      if (result.success && result.data) {
-        try {
-          return parseCategorizationResponse(result.data, new Set(allSlugs))
-        } catch (parseErr) {
-          console.warn('[categorize] Codex CLI response parse failed, falling back to SDK:', parseErr)
-        }
-      } else {
-        console.warn('[categorize] Codex CLI failed, falling back to SDK:', result.error)
-      }
+      if (result.success && result.data) return parseCategorizationResponse(result.data, new Set(allSlugs))
+      throw new Error(`Codex CLI failed: ${result.error ?? 'unknown error'}`)
     }
-  } else {
-    if (await getCliAvailability()) {
-      const model = await getActiveModel()
-      const cliModel = modelNameToCliAlias(model)
-
-      const result = await claudePrompt(prompt, { model: cliModel, timeoutMs: 60_000 })
-      if (result.success && result.data) {
-        try {
-          return parseCategorizationResponse(result.data, new Set(allSlugs))
-        } catch (parseErr) {
-          console.warn('[categorize] CLI response parse failed, falling back to SDK:', parseErr)
-        }
-      } else {
-        console.warn('[categorize] CLI failed, falling back to SDK:', result.error)
-      }
-    }
+  } else if (await getCliAvailability()) {
+    const result = await claudePrompt(prompt, { model: modelNameToCliAlias(model), timeoutMs: 60_000 })
+    if (result.success && result.data) return parseCategorizationResponse(result.data, new Set(allSlugs))
+    throw new Error(`Claude CLI failed: ${result.error ?? 'unknown error'}`)
   }
 
-  // Fallback to SDK (requires API key)
-  if (!client) {
-    throw new Error('No CLI available and no API key configured.')
-  }
-
-  const model = await getActiveModel()
-  const response = await client.createMessage({
-    model,
-    max_tokens: 2048,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  if (!response.text) throw new Error('No text content in AI response')
-
-  return parseCategorizationResponse(response.text, new Set(allSlugs))
+  throw new Error('No AI available: add an API key in Settings or sign in to Claude CLI.')
 }
 
 export async function writeCategoryResults(results: CategorizationResult[]): Promise<void> {
