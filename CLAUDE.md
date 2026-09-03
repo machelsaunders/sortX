@@ -70,6 +70,7 @@ prisma/schema.prisma    Bookmark (+quotedText, like/retweet/reply/view counts, l
 
 - Translation: `lib/translate.ts`; pipeline translates non-English chunks, `POST /api/bookmarks/[id]/translate` on demand; `translatedText` is indexed (FTS column `translated`, embedding doc).
 - Related posts: `relatedByVector()` in `lib/embeddings.ts`, `GET /api/bookmarks/[id]/related`.
+- Mindmap sizing/layout rules live in `lib/mindmap-layout.ts` (pure): node diameters from counts, size-aware ring and spiral layouts; the API sends `diameter` in node data.
 - Topic map: `lib/topics.ts` clusters a category's vectors (k-means, k = clamp(sqrt(n/4), 3, 12)), names clusters with one model call, caches in Setting `topics_<slug>` keyed by membership hash. `GET /api/mindmap?category=slug` returns `mode: 'topics' | 'tweets'`; `&topic=i` returns a cluster's posts.
 - Scheduled sync: `lib/x-sync.ts` + `instrumentation.ts` (restores the timer on boot); Settings UI is `XSyncSection` in `app/settings/page.tsx`.
 - Promote a topic to a category: `POST /api/categories/from-topic { slug, topicIndex, name? }` (mindmap button); moves the posts and invalidates the parent's topic cache via membership hash.

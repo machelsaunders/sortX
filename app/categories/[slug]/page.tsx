@@ -48,6 +48,77 @@ function Pagination({ page, total, limit, onChange }: {
   )
 }
 
+
+interface TopicChip { name: string; size: number; index: number }
+
+function TopicsSection({ slug, onChanged }: { slug: string; onChanged: () => void }) {
+  const [topics, setTopics] = useState<TopicChip[] | null>(null)
+  const [busy, setBusy] = useState<number | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setTopics(null)
+    fetch(`/api/mindmap?category=${slug}`)
+      .then((r) => r.json())
+      .then((d: { mode?: string; nodes?: { type: string; data: TopicChip }[] }) => {
+        if (cancelled) return
+        if (d.mode !== 'topics') { setTopics([]); return }
+        setTopics((d.nodes ?? []).filter((n) => n.type === 'topic').map((n) => n.data))
+      })
+      .catch(() => { if (!cancelled) setTopics([]) })
+    return () => { cancelled = true }
+  }, [slug])
+
+  async function promote(t: TopicChip) {
+    const name = window.prompt(`Create a category from "${t.name}" (${t.size} posts). Name:`, t.name)
+    if (!name) return
+    setBusy(t.index)
+    try {
+      const res = await fetch('/api/categories/from-topic', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug, topicIndex: t.index, name }),
+      })
+      const d = (await res.json()) as { error?: string; moved?: number }
+      if (!res.ok) throw new Error(d.error ?? 'Failed')
+      onChanged()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Could not create the category')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  if (topics === null || topics.length === 0) return null
+
+  return (
+    <div className="mb-6 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <p className="text-xs uppercase tracking-wider text-zinc-500 font-medium">Topics inside this category</p>
+          <p className="text-xs text-zinc-600 mt-0.5">Found from the posts&apos; meaning. Promote one to give it its own category.</p>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {topics.map((t) => (
+          <div key={t.index} className="group flex items-center gap-2 pl-3 pr-1.5 py-1.5 rounded-full bg-zinc-800/70 border border-zinc-700/60 text-sm">
+            <span className="text-zinc-200">{t.name}</span>
+            <span className="text-xs text-zinc-500 tabular-nums">{t.size}</span>
+            <button
+              onClick={() => void promote(t)}
+              disabled={busy !== null}
+              title="Make this topic its own category"
+              className="ml-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-600/0 text-indigo-400 hover:bg-indigo-600 hover:text-white disabled:opacity-50 transition-colors"
+            >
+              {busy === t.index ? '…' : 'Make category'}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function CategoryPage() {
   const { slug } = useParams<{ slug: string }>()
   const router = useRouter()
@@ -174,6 +245,8 @@ export default function CategoryPage() {
           </div>
         </div>
       )}
+
+      {category && <TopicsSection slug={slug} onChanged={() => window.location.reload()} />}
 
       {loading && (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">

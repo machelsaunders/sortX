@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import {
   ReactFlow,
   Background,
@@ -10,6 +10,7 @@ import {
   type Node,
   type Edge,
   type NodeMouseHandler,
+  type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { Type, FolderPlus, Loader2 } from 'lucide-react'
@@ -19,29 +20,34 @@ import TweetNode from './tweet-node'
 import TopicNode from './topic-node'
 import ChainEdge from './chain-edge'
 import { MindmapContext } from './mindmap-context'
+import { ringLayout, spiralLayout, tweetDiameter, topicDiameter, categoryDiameter } from '@/lib/mindmap-layout'
 
 const nodeTypes = { root: RootNode, category: CategoryNode, tweet: TweetNode, topic: TopicNode }
 const edgeTypes = { chain: ChainEdge }
 
-// Golden angle — Fibonacci/sunflower spiral for organic, non-overlapping spread
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5)) // ≈ 137.508°
+function nodeDiameter(n: Node): number {
+  const d = n.data as { diameter?: number; count?: number; size?: number; likeCount?: number }
+  if (typeof d.diameter === 'number') return d.diameter
+  if (n.type === 'category') return categoryDiameter(d.count ?? 0)
+  if (n.type === 'topic') return topicDiameter(d.size ?? 0)
+  if (n.type === 'tweet') return tweetDiameter(d.likeCount)
+  return 140
+}
 
+function centerOf(n: Node): { x: number; y: number } {
+  const d = nodeDiameter(n)
+  return { x: n.position.x + d / 2, y: n.position.y + d / 2 }
+}
+
+/** Posts around a parent node: bigger (more-liked) posts get more room. */
 function layoutTweetNodes(nodes: Node[], center: Node): Node[] {
-  const count = nodes.length
-  return nodes.map((n, i) => {
-    const angle = i * GOLDEN_ANGLE
-    // Scale radius with count so nodes never overlap, even at 100+ bookmarks
-    const t = count > 1 ? (i + 0.5) / count : 0.5
-    const maxRadius = Math.max(400, 80 * Math.sqrt(count))
-    const radius = 110 + maxRadius * Math.sqrt(t)
-    return {
-      ...n,
-      position: {
-        x: center.position.x + Math.round(radius * Math.cos(angle)),
-        y: center.position.y + Math.round(radius * Math.sin(angle)),
-      },
-    }
-  })
+  const diameters = nodes.map(tweetDiameterOf)
+  const positions = spiralLayout(diameters, centerOf(center), nodeDiameter(center) / 2 + 70)
+  return nodes.map((n, i) => ({ ...n, position: positions[i] }))
+}
+
+function tweetDiameterOf(n: Node): number {
+  return tweetDiameter((n.data as { likeCount?: number }).likeCount)
 }
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
@@ -58,6 +64,11 @@ type ViewMode = 'categories' | 'focused' | 'topic'
 export default function MindmapCanvas({ initialNodes, initialEdges, onGraphChanged }: MindmapCanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
+  const rf = useRef<ReactFlowInstance | null>(null)
+  /** Re-frame the graph after the visible node set changes */
+  const refit = useCallback(() => {
+    setTimeout(() => rf.current?.fitView({ padding: 0.18, duration: 450 }), 60)
+  }, [])
   const [viewMode, setViewMode] = useState<ViewMode>('categories')
   const [focusedSlug, setFocusedSlug] = useState<string | null>(null)
   const [tweetCache, setTweetCache] = useState<Record<string, { nodes: Node[]; edges: Edge[] }>>({})
@@ -84,7 +95,8 @@ export default function MindmapCanvas({ initialNodes, initialEdges, onGraphChang
     setFocusedSlug(null)
     setNodes(initialNodes)
     setEdges(initialEdges)
-  }, [initialNodes, initialEdges, setNodes, setEdges])
+    refit()
+  }, [initialNodes, initialEdges, setNodes, setEdges, refit])
 
   const [focusedTopic, setFocusedTopic] = useState<{ slug: string; index: number; categoryNode: Node } | null>(null)
 
@@ -97,14 +109,11 @@ export default function MindmapCanvas({ initialNodes, initialEdges, onGraphChang
     }))
   }
 
-  /** Lay topic nodes on a ring around the category node. */
+  /** Lay topic nodes on a ring around the category node, arcs proportional to size. */
   function layoutTopicNodes(topicNodes: Node[], center: Node): Node[] {
-    const total = topicNodes.length
-    const radius = Math.max(230, Math.round((total * 195) / (2 * Math.PI)))
-    return topicNodes.map((n, i) => {
-      const angle = (2 * Math.PI * i) / total - Math.PI / 2
-      return { ...n, position: { x: center.position.x + Math.round(radius * Math.cos(angle)), y: center.position.y + Math.round(radius * Math.sin(angle)) } }
-    })
+    const diameters = topicNodes.map(nodeDiameter)
+    const positions = ringLayout(diameters, { center: centerOf(center), gap: 36, minRadius: nodeDiameter(center) / 2 + 170 })
+    return topicNodes.map((n, i) => ({ ...n, position: positions[i] }))
   }
 
   const openCategory = useCallback(async (node: Node) => {
@@ -119,6 +128,7 @@ export default function MindmapCanvas({ initialNodes, initialEdges, onGraphChang
       const positioned = isTopics ? layoutTopicNodes(cn, node) : layoutTweetNodes(cn, node)
       setNodes([node, ...positioned])
       setEdges(ce)
+      refit()
       return
     }
 
@@ -131,6 +141,7 @@ export default function MindmapCanvas({ initialNodes, initialEdges, onGraphChang
         setTweetCache((prev) => ({ ...prev, [slug]: { nodes: topicNodes, edges: newEdges } }))
         setNodes([node, ...positioned])
         setEdges(newEdges)
+      refit()
       } else {
         const tweetNodes = newNodes.filter((n) => n.type === 'tweet')
         const positioned = layoutTweetNodes(tweetNodes, node)
@@ -138,6 +149,7 @@ export default function MindmapCanvas({ initialNodes, initialEdges, onGraphChang
         setTweetCache((prev) => ({ ...prev, [slug]: { nodes: tweetNodes, edges: styledEdges } }))
         setNodes([node, ...positioned])
         setEdges(styledEdges)
+      refit()
       }
     } catch (err) {
       console.error('Failed to load category:', err)
@@ -149,12 +161,15 @@ export default function MindmapCanvas({ initialNodes, initialEdges, onGraphChang
     const key = `${slug}#${index}`
     setFocusedTopic({ slug, index, categoryNode })
     setViewMode('topic')
-    const centered: Node = { ...topicNode, position: categoryNode.position }
+    const c = centerOf(categoryNode)
+    const td = nodeDiameter(topicNode)
+    const centered: Node = { ...topicNode, position: { x: c.x - td / 2, y: c.y - td / 2 } }
 
     if (tweetCache[key]) {
       const { nodes: cn, edges: ce } = tweetCache[key]
       setNodes([centered, ...layoutTweetNodes(cn, centered)])
       setEdges(ce)
+      refit()
       return
     }
     try {
@@ -165,6 +180,7 @@ export default function MindmapCanvas({ initialNodes, initialEdges, onGraphChang
       setTweetCache((prev) => ({ ...prev, [key]: { nodes: tweetNodes, edges: styledEdges } }))
       setNodes([centered, ...layoutTweetNodes(tweetNodes, centered)])
       setEdges(styledEdges)
+      refit()
     } catch (err) {
       console.error('Failed to load topic:', err)
     }
@@ -269,6 +285,7 @@ export default function MindmapCanvas({ initialNodes, initialEdges, onGraphChang
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
+        onInit={(inst) => { rf.current = inst }}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         fitView

@@ -46,7 +46,7 @@ Each of those is understood, not just keyword-matched: authors, time ranges, med
 | Video | Link out to X | **Plays inline** on the card (proxy fallback), GIFs loop |
 | Related posts | — | Sparkle button on every card shows the nearest posts by meaning (local vectors, instant) |
 | Automatic sync | Cookie sync existed as an API only, with a hardcoded query ID | **Settings → Automatic X sync**: paste two cookies once, pick an interval; incremental (stops at the first known page), survives restarts, runs the pipeline on new posts |
-| Mindmap | Category → up to 66 posts | Category → **named topic clusters** (k-means over embeddings, named by the model) → posts; **Make this a category** promotes a topic and moves its posts |
+| Mindmap | Category → up to 66 posts, every node the same size | Node **area follows the count** (categories by posts, topics by cluster size, posts by likes); category → **named topic clusters** → posts; **Make this a category** promotes a topic and moves its posts (also from the category page) |
 | Extension | — | `extension/` folder: **sortX Sync** browser extension for zero-setup automatic sync |
 | Pipeline | 4 stages | 5 stages — a final indexing stage keeps the search indexes in sync with new tags and categories |
 | Mobile | Fixed desktop sidebar | Responsive: top bar + slide-out drawer on phones and tablets |

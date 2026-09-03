@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/db'
 import { getCategoryTopics } from '@/lib/topics'
+import { categoryDiameter, topicDiameter, ringLayout } from '@/lib/mindmap-layout'
 
 interface MindMapNode {
   id: string
@@ -25,24 +26,8 @@ interface MindMapResponse {
 const ROOT_POSITION = { x: 0, y: 0 }
 const TWEET_RADIUS = 200
 
-// Keep category nodes equidistant: radius scales with count so the gap between
-// node edges stays constant (~36px) regardless of how many categories exist.
-const CAT_NODE_DIAMETER = 112
-const CAT_NODE_GAP = 36
-const CAT_MIN_RADIUS = 200
-
-function categoryRadius(count: number): number {
-  const circumference = count * (CAT_NODE_DIAMETER + CAT_NODE_GAP)
-  return Math.max(CAT_MIN_RADIUS, Math.round(circumference / (2 * Math.PI)))
-}
-
-function categoryPosition(index: number, total: number, radius: number): { x: number; y: number } {
-  const angle = (2 * Math.PI * index) / total - Math.PI / 2
-  return {
-    x: Math.round(ROOT_POSITION.x + radius * Math.cos(angle)),
-    y: Math.round(ROOT_POSITION.y + radius * Math.sin(angle)),
-  }
-}
+const ROOT_DIAMETER = 148
+const ROOT_CENTER = { x: ROOT_POSITION.x + ROOT_DIAMETER / 2, y: ROOT_POSITION.y + ROOT_DIAMETER / 2 }
 
 function tweetPosition(
   categoryPosition: { x: number; y: number },
@@ -74,7 +59,8 @@ async function getBaseGraph(): Promise<MindMapResponse> {
     position: ROOT_POSITION,
   }
 
-  const radius = categoryRadius(categories.length)
+  const diameters = categories.map((cat) => categoryDiameter(cat._count.bookmarks))
+  const positions = ringLayout(diameters, { center: ROOT_CENTER, gap: 44, minRadius: 280 })
   const categoryNodes: MindMapNode[] = categories.map((cat, index) => ({
     id: `cat-${cat.slug}`,
     type: 'category',
@@ -84,8 +70,9 @@ async function getBaseGraph(): Promise<MindMapResponse> {
       color: cat.color,
       count: cat._count.bookmarks,
       description: cat.description,
+      diameter: diameters[index],
     },
-    position: categoryPosition(index, categories.length, radius),
+    position: positions[index],
   }))
 
   const categoryEdges: MindMapEdge[] = categories.map((cat) => ({
@@ -132,6 +119,7 @@ async function getCategoryTweetNodes(
           authorHandle: true,
           authorName: true,
           tweetCreatedAt: true,
+          likeCount: true,
           semanticTags: true,
           mediaItems: {
             select: { url: true, thumbnailUrl: true, type: true, imageTags: true },
@@ -185,6 +173,7 @@ async function getCategoryTweetNodes(
         categoryColor: category.color,
         confidence: bookmark.confidence,
         visualSummary,
+        likeCount: bookmark.likeCount ?? 0,
       },
       position: tweetPosition(catPos, index, bookmarks.length),
     }
@@ -202,22 +191,19 @@ async function getCategoryTweetNodes(
   }
 }
 
-const TOPIC_NODE_WIDTH = 150
-const TOPIC_NODE_GAP = 44
-
 async function getCategoryTopicNodes(categorySlug: string, force: boolean): Promise<MindMapResponse | null> {
   const category = await prisma.category.findUnique({ where: { slug: categorySlug }, select: { color: true, name: true } })
   if (!category) return null
   const result = await getCategoryTopics(categorySlug, force)
   if (!result || result.topics.length < 2) return null
 
-  const total = result.topics.length
-  const radius = Math.max(220, Math.round((total * (TOPIC_NODE_WIDTH + TOPIC_NODE_GAP)) / (2 * Math.PI)))
+  const diameters = result.topics.map((t) => topicDiameter(t.size))
+  const positions = ringLayout(diameters, { center: ROOT_CENTER, gap: 36, minRadius: 240 })
   const nodes: MindMapNode[] = result.topics.map((t, index) => ({
     id: `topic-${categorySlug}-${t.index}`,
     type: 'topic',
-    data: { name: t.name, size: t.size, index: t.index, slug: categorySlug, color: category.color },
-    position: categoryPosition(index, total, radius),
+    data: { name: t.name, size: t.size, index: t.index, slug: categorySlug, color: category.color, diameter: diameters[index] },
+    position: positions[index],
   }))
   const edges: MindMapEdge[] = result.topics.map((t) => ({
     id: `edge-cat-${categorySlug}-topic-${t.index}`,

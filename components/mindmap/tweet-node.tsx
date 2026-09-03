@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { ExternalLink } from 'lucide-react'
 import { useMindmapSettings } from './mindmap-context'
+import { tweetDiameter } from '@/lib/mindmap-layout'
 
 interface TweetNodeData {
   tweetId: string
@@ -17,6 +18,7 @@ interface TweetNodeData {
   tweetCreatedAt: string | null
   hasMedia: boolean
   visualSummary: string | null
+  likeCount?: number
   [key: string]: unknown
 }
 
@@ -34,7 +36,9 @@ export default function TweetNode({ data }: NodeProps) {
     thumbnailUrl,
     mediaType,
     categoryColor = '#6366f1',
+    likeCount,
   } = data as TweetNodeData
+  const d = tweetDiameter(likeCount)
 
   const [imgFailed, setImgFailed] = useState(false)
   const { showLabels } = useMindmapSettings()
@@ -47,15 +51,16 @@ export default function TweetNode({ data }: NodeProps) {
   const showImage = proxied !== null && !imgFailed
 
   return (
-    <div className="flex flex-col items-center select-none" style={{ width: 72, gap: 0 }}>
+    <div className="flex flex-col items-center select-none" style={{ width: d + 4, gap: 0 }}>
       <Handle type="target" position={Position.Left} style={HANDLE_STYLE} />
 
       {/* Circular node */}
       <div
         className="relative shrink-0"
+        title={likeCount ? `${likeCount.toLocaleString()} likes` : undefined}
         style={{
-          width: 68,
-          height: 68,
+          width: d,
+          height: d,
           borderRadius: '50%',
           border: `2px solid ${color}`,
           overflow: 'hidden',

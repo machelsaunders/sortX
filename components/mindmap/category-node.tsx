@@ -1,6 +1,7 @@
 'use client'
 
 import { type NodeProps } from '@xyflow/react'
+import { categoryDiameter } from '@/lib/mindmap-layout'
 
 interface CategoryNodeData {
   name: string
@@ -36,10 +37,12 @@ export default function CategoryNode({ data }: CategoryNodeProps) {
 
   const mid = darkenColor(color, 0.75)
   const dark = darkenColor(color, 0.42)
-  // Empty categories render smaller and more translucent so they look intentional
+  // Area grows with the number of posts; empty categories are small and translucent
   const isEmpty = count === 0
-  const size = isEmpty ? 90 : 112
+  const size = (data as { diameter?: number }).diameter ?? categoryDiameter(count)
   const nodeOpacity = isEmpty ? 0.5 : 1
+  const nameSize = Math.max(10, Math.min(15, Math.round(size / 11)))
+  const countSize = Math.max(9, Math.min(13, Math.round(size / 14)))
 
   return (
     <div
@@ -79,7 +82,7 @@ export default function CategoryNode({ data }: CategoryNodeProps) {
       <div
         className="absolute rounded-full"
         style={{
-          top: 13, left: 17, width: 28, height: 12,
+          top: size * 0.12, left: size * 0.16, width: size * 0.25, height: size * 0.11,
           background: 'radial-gradient(ellipse, rgba(255,255,255,0.25) 0%, transparent 70%)',
         }}
       />
@@ -87,16 +90,16 @@ export default function CategoryNode({ data }: CategoryNodeProps) {
       {/* Text */}
       <div className="relative z-10 flex flex-col items-center gap-0.5 px-3">
         <span
-          className="text-white font-bold text-[11px] text-center leading-tight"
-          style={{ textShadow: '0 1px 4px rgba(0,0,0,0.65)', letterSpacing: '-0.01em' }}
+          className="text-white font-bold text-center leading-tight"
+          style={{ fontSize: nameSize, textShadow: '0 1px 4px rgba(0,0,0,0.65)', letterSpacing: '-0.01em' }}
         >
           {name}
         </span>
         <span
-          className="text-white/65 text-[10px] font-medium tabular-nums"
-          style={{ textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}
+          className="text-white/65 font-medium tabular-nums"
+          style={{ fontSize: countSize, textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}
         >
-          {count}
+          {count.toLocaleString()}
         </span>
       </div>
     </div>
