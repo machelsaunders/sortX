@@ -17,6 +17,8 @@ export const BOOKMARK_LIST_SELECT = {
   retweetCount: true,
   replyCount: true,
   viewCount: true,
+  lang: true,
+  translatedText: true,
   mediaItems: { select: { id: true, type: true, url: true, thumbnailUrl: true, imageTags: true } },
   categories: {
     select: {
@@ -41,6 +43,8 @@ export interface BookmarkListRow {
   retweetCount?: number | null
   replyCount?: number | null
   viewCount?: number | null
+  lang?: string | null
+  translatedText?: string | null
   mediaItems: { id: string; type: string; url: string; thumbnailUrl: string | null; imageTags?: string | null }[]
   categories: { confidence: number; category: { id: string; name: string; slug: string; color: string } }[]
 }
@@ -60,6 +64,8 @@ export function serializeBookmark(b: BookmarkListRow): BookmarkWithMedia {
     retweetCount: b.retweetCount ?? null,
     replyCount: b.replyCount ?? null,
     viewCount: b.viewCount ?? null,
+    lang: b.lang ?? null,
+    translatedText: b.translatedText ?? null,
     mediaItems: b.mediaItems.map((m) => ({
       id: m.id,
       type: m.type,

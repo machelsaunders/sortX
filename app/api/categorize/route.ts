@@ -18,6 +18,7 @@ import {
 import { backfillEntities } from '@/lib/rawjson-extractor'
 import { rebuildFts } from '@/lib/fts'
 import { embedBookmarks } from '@/lib/embeddings'
+import { translateAndStore } from '@/lib/translate'
 
 type Stage = 'vision' | 'entities' | 'enrichment' | 'categorize' | 'parallel' | 'index'
 
@@ -106,7 +107,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Categorization is already running' }, { status: 409 })
   }
 
-  let body: { bookmarkIds?: string[]; apiKey?: string; force?: boolean } = {}
+  let body: { bookmarkIds?: string[]; apiKey?: string; force?: boolean; category?: string; replaceCategories?: boolean } = {}
   try {
     const text = await request.text()
     if (text.trim()) body = JSON.parse(text)
@@ -114,7 +115,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
-  const { bookmarkIds = [], apiKey, force = false } = body
+  const { bookmarkIds: bodyIds = [], apiKey, force = false, category, replaceCategories = false } = body
+
+  // `category` = re-run for every bookmark currently in that category (e.g. split up "general")
+  let bookmarkIds = bodyIds
+  if (category) {
+    const rows = await prisma.bookmark.findMany({
+      where: { categories: { some: { category: { slug: category } } } },
+      select: { id: true },
+    })
+    bookmarkIds = rows.map((r) => r.id)
+    if (bookmarkIds.length === 0) {
+      return NextResponse.json({ error: `No bookmarks in category "${category}"` }, { status: 400 })
+    }
+  }
 
   if (apiKey && typeof apiKey === 'string' && apiKey.trim() !== '') {
     const currentProvider = await getProvider()
@@ -247,7 +261,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
                 const batch = rows.map(mapBookmarkForCategorization)
                 try {
                   const results = await categorizeBatch(batch, client, categoryDescriptions, allSlugs)
-                  await writeCategoryResults(results)
+                  await writeCategoryResults(results, { replace: replaceCategories })
                   counts.categorized += ids.length
                   setState({ stageCounts: { ...counts } })
                 } catch (catErr) {
@@ -278,6 +292,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
               select: {
                 id: true,
                 text: true,
+                lang: true,
+                translatedText: true,
                 semanticTags: true,
                 entities: true,
                 mediaItems: {
@@ -286,6 +302,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
                 },
               },
             })
+
+            // Translation (non-English posts only; one call per chunk)
+            const untranslated = rows.filter((bm) => !bm.translatedText)
+            if (untranslated.length && client) {
+              try {
+                await translateAndStore(untranslated.map((bm) => ({ id: bm.id, text: bm.text, lang: bm.lang })), client)
+              } catch (err) {
+                console.warn('[pipeline] translation failed for chunk:', err instanceof Error ? err.message : err)
+              }
+            }
 
             // Vision
             const visionTasks: (() => Promise<void>)[] = []

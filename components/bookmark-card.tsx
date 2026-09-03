@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useRef, useEffect, useState } from 'react'
-import { ExternalLink, Download, FileText, Play, Pencil, X, Check, ImageOff, Bookmark, Globe, Heart, Repeat2 } from 'lucide-react'
+import { ExternalLink, Download, FileText, Play, Pencil, X, Check, ImageOff, Bookmark, Globe, Heart, Repeat2, Languages } from 'lucide-react'
 import type { BookmarkWithMedia, Category } from '@/lib/types'
 
 // ── URL helpers ────────────────────────────────────────────────────────────────
@@ -234,6 +234,21 @@ function getInitials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
 }
 
+const SKIP_LANGS = new Set(['en', 'und', 'zxx', 'qme', 'qam', 'qht', 'qst', 'qct', 'art', 'in'])
+const LANGUAGE_NAMES: Record<string, string> = {
+  es: 'Spanish', fr: 'French', pt: 'Portuguese', ja: 'Japanese', de: 'German', it: 'Italian', ar: 'Arabic', ru: 'Russian',
+  ko: 'Korean', zh: 'Chinese', tr: 'Turkish', hi: 'Hindi', id: 'Indonesian', nl: 'Dutch', pl: 'Polish', sv: 'Swedish',
+  th: 'Thai', vi: 'Vietnamese', uk: 'Ukrainian', fa: 'Persian', he: 'Hebrew', el: 'Greek', cs: 'Czech', ro: 'Romanian',
+  da: 'Danish', fi: 'Finnish', no: 'Norwegian', hu: 'Hungarian', tl: 'Filipino', ca: 'Catalan',
+}
+function languageName(lang: string | null | undefined): string {
+  return (lang && LANGUAGE_NAMES[lang]) || (lang ? lang.toUpperCase() : 'another language')
+}
+function needsTranslationClient(lang: string | null | undefined, text: string): boolean {
+  if (!lang || SKIP_LANGS.has(lang)) return false
+  return text.replace(/https?:\/\/\S+/g, '').replace(/[\s\p{Emoji}\p{P}]/gu, '').length >= 3
+}
+
 function formatCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}K`
@@ -356,6 +371,10 @@ function MediaPlaceholder({ onClick, label, isVideo }: { onClick?: (e: React.Mou
 
 function TopMediaSlot({ item, tweetUrl }: TopMediaSlotProps) {
   const [imgError, setImgError] = useState(false)
+  const [playing, setPlaying] = useState(false)
+  // Direct CDN URL first; if the browser can't load it, retry through our proxy; then give up to X
+  const [videoSrc, setVideoSrc] = useState<string | null>(null)
+  const [videoFailed, setVideoFailed] = useState(false)
 
   // ── Photo: show inline ─────────────────────────────────────────────────────
   if (item.type === 'photo') {
@@ -383,29 +402,84 @@ function TopMediaSlot({ item, tweetUrl }: TopMediaSlotProps) {
     )
   }
 
-  // ── Video/GIF: always redirect to tweet — can't play locally ──────────────
+  // ── Video/GIF: play inline when we have a direct media URL ────────────────
   // Guard: thumbnailUrl that is itself a video URL is not usable as an <img>
   const rawThumb = item.thumbnailUrl ?? null
   const thumb = rawThumb && !isVideoUrl(rawThumb) ? rawThumb
     : (!isVideoUrl(item.url) ? item.url : deriveVideoThumb(item.url))
+  const playable = isVideoUrl(item.url)
+
+  if (playable && playing && videoFailed) {
+    return (
+      <a href={tweetUrl} target="_blank" rel="noopener noreferrer" className="relative block" onClick={(e) => e.stopPropagation()}>
+        <MediaPlaceholder label="Couldn't play here — Watch on X ↗" isVideo />
+      </a>
+    )
+  }
+
+  if (playable && playing) {
+    return (
+      <div className="relative bg-black" onClick={(e) => e.stopPropagation()}>
+        <video
+          src={videoSrc ?? item.url}
+          poster={thumb ? proxyUrl(thumb) : undefined}
+          controls
+          autoPlay
+          playsInline
+          loop={item.type === 'gif'}
+          muted={item.type === 'gif'}
+          preload="metadata"
+          className="w-full max-h-[420px] object-contain bg-black"
+          onError={() => {
+            if (videoSrc === null) setVideoSrc(proxyUrl(item.url))
+            else setVideoFailed(true)
+          }}
+        />
+        <a
+          href={tweetUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="absolute top-2 right-2 px-2 py-1 rounded-md bg-black/60 hover:bg-black/80 text-[11px] text-zinc-200 backdrop-blur"
+          title="Open on X"
+        >
+          X ↗
+        </a>
+      </div>
+    )
+  }
+
+  const inner = thumb && !imgError ? (
+    <div className="relative">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={proxyUrl(thumb)}
+        alt=""
+        className="w-full h-48 object-cover"
+        loading="lazy"
+        onError={() => setImgError(true)}
+      />
+      <MediaOverlay label={playable ? (item.type === 'gif' ? 'Play GIF' : 'Play') : undefined} />
+    </div>
+  ) : (
+    <MediaPlaceholder label={playable ? 'Play' : 'Watch on X ↗'} isVideo={item.type === 'video'} />
+  )
+
+  if (playable) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setPlaying(true) }}
+        className="relative block w-full text-left cursor-pointer"
+        title={item.type === 'gif' ? 'Play GIF' : 'Play video'}
+      >
+        {inner}
+      </button>
+    )
+  }
 
   return (
     <a href={tweetUrl} target="_blank" rel="noopener noreferrer" className="relative block" onClick={(e) => e.stopPropagation()}>
-      {thumb && !imgError ? (
-        <div className="relative">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={proxyUrl(thumb)}
-            alt=""
-            className="w-full h-48 object-cover"
-            loading="lazy"
-            onError={() => setImgError(true)}
-          />
-          <MediaOverlay />
-        </div>
-      ) : (
-        <MediaPlaceholder label="Watch on X ↗" isVideo={item.type === 'video'} />
-      )}
+      {inner}
     </a>
   )
 }
@@ -602,7 +676,24 @@ export default function BookmarkCard({ bookmark }: BookmarkCardProps) {
 
   // Always strip t.co shortlinks from display text — Twitter appends them to every tweet
   const tcoUrls = bookmark.text.match(TCO_REGEX) ?? []
-  const cleanText = stripTcoUrls(bookmark.text)
+  const [translated, setTranslated] = useState<string | null>(bookmark.translatedText ?? null)
+  const [showOriginal, setShowOriginal] = useState(false)
+  const [translating, setTranslating] = useState(false)
+  const canTranslate = needsTranslationClient(bookmark.lang, bookmark.text)
+  const cleanText = stripTcoUrls(translated && !showOriginal ? translated : bookmark.text)
+
+  async function handleTranslate(e: React.MouseEvent) {
+    e.stopPropagation()
+    if (translating) return
+    setTranslating(true)
+    try {
+      const res = await fetch(`/api/bookmarks/${bookmark.id}/translate`, { method: 'POST' })
+      const data = (await res.json()) as { translatedText?: string }
+      if (data.translatedText) { setTranslated(data.translatedText); setShowOriginal(false) }
+    } catch { /* leave original */ } finally {
+      setTranslating(false)
+    }
+  }
   // Show link preview only when there's no real media attached
   const previewUrl = !hasMedia && tcoUrls.length > 0 ? tcoUrls[tcoUrls.length - 1] : null
 
@@ -780,6 +871,23 @@ export default function BookmarkCard({ bookmark }: BookmarkCardProps) {
             <blockquote className="mb-2 pl-3 border-l-2 border-zinc-700 text-xs text-zinc-400 leading-relaxed line-clamp-3" title={bookmark.quotedText}>
               {stripTcoUrls(bookmark.quotedText)}
             </blockquote>
+          )}
+          {(translated || canTranslate) && (
+            <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-500">
+              <Languages size={11} className="shrink-0" />
+              {translated ? (
+                <>
+                  <span>{showOriginal ? `Original (${languageName(bookmark.lang)})` : `Translated from ${languageName(bookmark.lang)}`}</span>
+                  <button onClick={(e) => { e.stopPropagation(); setShowOriginal((v) => !v) }} className="text-indigo-400 hover:text-indigo-300">
+                    {showOriginal ? 'show translation' : 'show original'}
+                  </button>
+                </>
+              ) : (
+                <button onClick={handleTranslate} disabled={translating} className="text-indigo-400 hover:text-indigo-300 disabled:opacity-50">
+                  {translating ? 'Translating…' : `Translate from ${languageName(bookmark.lang)}`}
+                </button>
+              )}
+            </div>
           )}
           {displayText.length > 0 && (
             <p className="text-sm text-zinc-200 leading-relaxed">

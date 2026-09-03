@@ -27,6 +27,7 @@ model Bookmark {
   replyCount      Int?
   viewCount       Int?
   lang            String?
+  translatedText  String?   // English translation of non-English posts (cached)
   mediaItems    MediaItem[]
   categories    BookmarkCategory[]
   embedding     BookmarkEmbedding?

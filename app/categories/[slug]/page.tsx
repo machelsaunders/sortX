@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { ChevronLeft, ChevronRight, Download, ArrowLeft } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, ArrowLeft , RefreshCw } from 'lucide-react'
 import BookmarkCard from '@/components/bookmark-card'
 import type { BookmarkWithMedia, Category } from '@/lib/types'
 
@@ -54,6 +54,27 @@ export default function CategoryPage() {
   const [data, setData] = useState<CategoryPageData | null>(null)
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
+  const [recategorizing, setRecategorizing] = useState(false)
+
+  async function handleRecategorize() {
+    if (!confirm(`Re-run AI categorization for every post in this category? Their current assignment will be replaced.`)) return
+    setRecategorizing(true)
+    try {
+      const res = await fetch('/api/categorize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: slug, replaceCategories: true }),
+      })
+      if (!res.ok && res.status !== 409) {
+        const d = (await res.json()) as { error?: string }
+        throw new Error(d.error ?? 'Failed to start')
+      }
+      router.push('/categorize')
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to start re-categorization')
+      setRecategorizing(false)
+    }
+  }
 
   const fetchData = useCallback(async (p: number) => {
     setLoading(true)
@@ -133,13 +154,24 @@ export default function CategoryPage() {
               <p className="text-zinc-500 text-sm mt-1">{total.toLocaleString()} bookmark{total !== 1 ? 's' : ''}</p>
             </div>
           </div>
-          <button
-            onClick={handleExport}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm font-medium transition-colors shrink-0"
-          >
-            <Download size={15} />
-            Export ZIP
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => void handleRecategorize()}
+              disabled={recategorizing}
+              title="Re-run AI categorization for these posts (replaces current assignment)"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-300 text-sm font-medium transition-colors"
+            >
+              <RefreshCw size={15} className={recategorizing ? 'animate-spin' : ''} />
+              Re-categorize
+            </button>
+            <button
+              onClick={handleExport}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm font-medium transition-colors"
+            >
+              <Download size={15} />
+              Export ZIP
+            </button>
+          </div>
         </div>
       )}
 

@@ -105,10 +105,82 @@ const DEFAULT_CATEGORIES = [
     isAiGenerated: false,
   },
   {
+    name: 'Sports & Football',
+    slug: 'sports',
+    color: '#22c55e',
+    description:
+      'Football/soccer (Premier League, Champions League, clubs like Manchester United, Arsenal, Real Madrid, national teams), players, managers, tactics, transfers, match footage and goals, stats and analytics, plus other sports: NBA, NFL, F1, boxing, UFC, tennis, golf, athletics, Olympics',
+    isAiGenerated: false,
+  },
+  {
+    name: 'Watches & Style',
+    slug: 'watches-style',
+    color: '#d4a373',
+    description:
+      'Watches and horology (Rolex, Patek, AP, Omega, references, movements, wrist shots), menswear and womenswear, tailoring, sneakers, luxury brands and craftsmanship (Brunello Cucinelli, Loro Piana), grooming, personal style, outfit posts',
+    isAiGenerated: false,
+  },
+  {
+    name: 'Music & Live Events',
+    slug: 'music',
+    color: '#f472b6',
+    description:
+      'Musicians, DJs and producers, concerts, festivals and club nights, album and song releases, live performance clips, hip-hop, electronic, Latin, R&B, music industry news, playlists',
+    isAiGenerated: false,
+  },
+  {
+    name: 'Movies & TV',
+    slug: 'movies-tv',
+    color: '#fb7185',
+    description:
+      'Films, TV series, streaming shows, anime, actors and directors, trailers, iconic scenes and clips, behind-the-scenes, reviews, cinematography, awards, nostalgia for classic films and shows',
+    isAiGenerated: false,
+  },
+  {
+    name: 'Inspiration & Self-improvement',
+    slug: 'inspiration',
+    color: '#facc15',
+    description:
+      'Motivational and inspirational posts, mindset, discipline, habits of successful people, life advice, relationships and dating advice, philosophy and stoicism, quotes, confidence, masculinity/femininity takes, personal growth stories',
+    isAiGenerated: false,
+  },
+  {
+    name: 'Culture & Society',
+    slug: 'culture-society',
+    color: '#a3a3a3',
+    description:
+      'Social and cultural commentary, viral moments and internet culture, relatable observations about everyday life, celebrity and pop-culture news, opinions on society, generational takes, history and nostalgia — content about people and culture that is not primarily a joke',
+    isAiGenerated: false,
+  },
+  {
+    name: 'Travel & Food',
+    slug: 'travel-food',
+    color: '#34d399',
+    description:
+      'Travel destinations, cities and hotels, flights and points, restaurants, cooking and recipes, food culture, coffee, nightlife, places to visit, vacation footage',
+    isAiGenerated: false,
+  },
+  {
+    name: 'Photography & Art',
+    slug: 'art-photography',
+    color: '#c084fc',
+    description:
+      'Photography, visual art, illustration, architecture and interiors, aesthetic imagery, cinematic footage and drone shots, museums and exhibitions, creative inspiration where the image itself is the point',
+    isAiGenerated: false,
+  },
+  {
+    name: 'Gaming',
+    slug: 'gaming',
+    color: '#60a5fa',
+    description:
+      'Video games, consoles and PC gaming, esports, game trailers and clips, game development and studios, retro gaming, gaming culture',
+    isAiGenerated: false,
+  },
+  {
     name: 'General',
     slug: 'general',
     color: '#64748b',
-    description: "Miscellaneous content that doesn't clearly fit any other category — use sparingly, only when no other category applies",
+    description: 'Last resort only: content that fits none of the other categories even loosely. Never combine with another category.',
     isAiGenerated: false,
   },
 ] as const
@@ -191,7 +263,8 @@ SIGNAL WEIGHTING (use all, not just text):
 - Hashtags like #bitcoin #eth → finance-crypto; #buildinpublic #saas → dev-tools/productivity
 
 AVOID:
-- Over-assigning "general" — it's a catch-all, not a default
+- "general" is a LAST RESORT: use it only when no other category fits at 0.5 or above, and never alongside another category. A football clip is sports, a wrist shot is watches-style, a viral clip of everyday life is culture-society, a motivational quote is inspiration — none of these are general
+- Non-English posts: categorize by meaning exactly as you would English ones
 - Conflating news about AI with AI resources (a news thread about OpenAI is "news", not "ai-resources")
 - Assigning categories based only on passing mentions (a dev tweet that mentions a price = dev-tools, not finance)
 
@@ -219,12 +292,14 @@ function parseCategorizationResponse(text: string, validSlugs: Set<string>): Cat
     const tweetId = String(item.tweetId ?? '')
     const rawAssignments = Array.isArray(item.assignments) ? item.assignments : []
 
-    const assignments: CategoryAssignment[] = (rawAssignments as Record<string, unknown>[])
+    let assignments: CategoryAssignment[] = (rawAssignments as Record<string, unknown>[])
       .map((a) => ({
         category: String(a.category ?? ''),
         confidence: typeof a.confidence === 'number' ? Math.min(1, Math.max(0.5, a.confidence)) : 0.8,
       }))
       .filter((a) => validSlugs.has(a.category))
+    // "general" is a fallback, never a co-category
+    if (assignments.length > 1) assignments = assignments.filter((a) => a.category !== 'general')
 
     return { tweetId, assignments }
   })
@@ -273,7 +348,10 @@ export async function categorizeBatch(
   throw new Error('No AI available: add an API key in Settings or sign in to Claude CLI.')
 }
 
-export async function writeCategoryResults(results: CategorizationResult[]): Promise<void> {
+export async function writeCategoryResults(
+  results: CategorizationResult[],
+  options: { replace?: boolean } = {},
+): Promise<void> {
   if (results.length === 0) return
 
   const tweetIds = results.map((r) => r.tweetId).filter(Boolean)
@@ -318,6 +396,10 @@ export async function writeCategoryResults(results: CategorizationResult[]): Pro
   if (upsertOps.length === 0) return
 
   await prisma.$transaction([
+    // Re-categorization: drop the old assignments first so stale ones (e.g. "general") disappear
+    ...(options.replace
+      ? [prisma.bookmarkCategory.deleteMany({ where: { bookmarkId: { in: bookmarkIdsToUpdate } } })]
+      : []),
     ...upsertOps,
     prisma.bookmark.updateMany({
       where: { id: { in: bookmarkIdsToUpdate } },

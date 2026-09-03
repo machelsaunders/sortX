@@ -10,13 +10,13 @@
 
 import prisma from '@/lib/db'
 
-export const FTS_TABLE = 'bookmark_fts_v2'
-const LEGACY_TABLE = 'bookmark_fts'
+export const FTS_TABLE = 'bookmark_fts_v3'
+const LEGACY_TABLES = ['bookmark_fts', 'bookmark_fts_v2']
 
 // Column order matters: bm25() weights below are positional.
-const COLUMNS = ['bookmark_id', 'text', 'quoted', 'author', 'semantic_tags', 'entities', 'image_tags'] as const
+const COLUMNS = ['bookmark_id', 'text', 'translated', 'quoted', 'author', 'semantic_tags', 'entities', 'image_tags'] as const
 // bookmark_id is UNINDEXED (weight ignored). Tweet text is the strongest signal.
-const BM25_WEIGHTS = [0, 10, 4, 6, 5, 3, 3]
+const BM25_WEIGHTS = [0, 10, 9, 4, 6, 5, 3, 3]
 
 let ensured = false
 
@@ -26,6 +26,7 @@ export async function ensureFtsTable(): Promise<void> {
     CREATE VIRTUAL TABLE IF NOT EXISTS ${FTS_TABLE} USING fts5(
       bookmark_id UNINDEXED,
       text,
+      translated,
       quoted,
       author,
       semantic_tags,
@@ -34,13 +35,20 @@ export async function ensureFtsTable(): Promise<void> {
       tokenize='porter unicode61 remove_diacritics 2'
     )
   `)
-  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS ${LEGACY_TABLE}`).catch(() => {})
+  for (const t of LEGACY_TABLES) await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS ${t}`).catch(() => {})
   ensured = true
+
+  // Freshly created (or schema bumped) table: populate it so search keeps working
+  const [{ n }] = await prisma.$queryRawUnsafe<{ n: number }[]>(`SELECT count(*) AS n FROM ${FTS_TABLE}`)
+  if (Number(n) === 0 && (await prisma.bookmark.count()) > 0) {
+    await rebuildFts().catch((err) => console.warn('[fts] auto-rebuild failed:', err))
+  }
 }
 
 export interface FtsSourceRow {
   id: string
   text: string
+  translatedText: string | null
   quotedText: string | null
   authorHandle: string
   authorName: string
@@ -52,6 +60,7 @@ export interface FtsSourceRow {
 export const FTS_SOURCE_SELECT = {
   id: true,
   text: true,
+  translatedText: true,
   quotedText: true,
   authorHandle: true,
   authorName: true,
@@ -107,6 +116,7 @@ function buildRow(b: FtsSourceRow): string[] {
   return [
     b.id,
     b.text,
+    b.translatedText ?? '',
     b.quotedText ?? '',
     `${b.authorName} ${b.authorHandle}`,
     semanticTagsToText(b.semanticTags),
@@ -121,10 +131,10 @@ async function insertRows(rows: FtsSourceRow[]): Promise<void> {
     const batch = rows.slice(i, i + BATCH)
     await prisma.$transaction(
       batch.map((b) => {
-        const [id, text, quoted, author, tags, ents, img] = buildRow(b)
+        const [id, text, translated, quoted, author, tags, ents, img] = buildRow(b)
         return prisma.$executeRawUnsafe(
-          `INSERT INTO ${FTS_TABLE}(${COLUMNS.join(', ')}) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          id, text, quoted, author, tags, ents, img,
+          `INSERT INTO ${FTS_TABLE}(${COLUMNS.join(', ')}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          id, text, translated, quoted, author, tags, ents, img,
         )
       }),
     )

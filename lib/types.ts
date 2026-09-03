@@ -28,6 +28,8 @@ export interface BookmarkWithMedia {
   retweetCount?: number | null
   replyCount?: number | null
   viewCount?: number | null
+  lang?: string | null
+  translatedText?: string | null
   mediaItems: MediaItem[]
   categories: BookmarkCategory[]
 }

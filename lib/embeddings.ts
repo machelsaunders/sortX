@@ -98,6 +98,7 @@ export async function embedTexts(texts: string[], kind: 'passage' | 'query' = 'p
 export const EMBED_SOURCE_SELECT = {
   id: true,
   text: true,
+  translatedText: true,
   quotedText: true,
   authorHandle: true,
   authorName: true,
@@ -111,6 +112,7 @@ export const EMBED_SOURCE_SELECT = {
 export interface EmbedSourceRow {
   id: string
   text: string
+  translatedText?: string | null
   quotedText: string | null
   authorHandle: string
   authorName: string
@@ -126,6 +128,7 @@ export function buildBookmarkDocument(b: EmbedSourceRow): string {
   const lines: string[] = []
   lines.push(`Post by ${b.authorName} (@${b.authorHandle})`)
   lines.push(b.text.trim())
+  if (b.translatedText) lines.push(`English: ${b.translatedText.trim()}`)
   if (b.quotedText) lines.push(`Quoting ${b.quotedText.trim()}`)
   const cats = b.categories.map((c) => c.category.name).filter(Boolean)
   if (cats.length) lines.push(`Topics: ${cats.join(', ')}`)
