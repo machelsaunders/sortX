@@ -3,7 +3,9 @@ import prisma from '@/lib/db'
 import { syncBookmarks, isSyncing } from '@/lib/x-sync'
 
 /** POST — trigger a manual sync using stored credentials */
-export async function POST() {
+export async function POST(request: Request) {
+  let full = false
+  try { const b = await request.json(); full = b?.full === true } catch { /* no body */ }
   if (isSyncing()) {
     return NextResponse.json({ error: 'A sync is already in progress' }, { status: 409 })
   }
@@ -21,7 +23,7 @@ export async function POST() {
       )
     }
 
-    const result = await syncBookmarks(authSetting.value, ct0Setting.value)
+    const result = await syncBookmarks(authSetting.value, ct0Setting.value, { full })
     return NextResponse.json(result)
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Sync failed'

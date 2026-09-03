@@ -1,22 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/db'
-import { startScheduler, stopScheduler, isSchedulerRunning } from '@/lib/x-sync'
+import { startScheduler, stopScheduler, isSchedulerRunning, isSyncing } from '@/lib/x-sync'
 
 /** GET — return current X credentials status + schedule config */
 export async function GET() {
   try {
-    const [authToken, ct0, interval, lastSync] = await Promise.all([
+    const [authToken, ct0, interval, lastSync, lastResult] = await Promise.all([
       prisma.setting.findUnique({ where: { key: 'x_auth_token' } }),
       prisma.setting.findUnique({ where: { key: 'x_ct0' } }),
       prisma.setting.findUnique({ where: { key: 'x_sync_interval' } }),
       prisma.setting.findUnique({ where: { key: 'x_last_sync' } }),
+      prisma.setting.findUnique({ where: { key: 'x_last_sync_result' } }),
     ])
+
+    let lastSyncResult: { imported: number; skipped: number; at: string } | null = null
+    try { lastSyncResult = lastResult?.value ? JSON.parse(lastResult.value) : null } catch { /* ignore */ }
 
     return NextResponse.json({
       hasCredentials: !!(authToken?.value && ct0?.value),
       syncInterval: interval?.value ?? 'off',
       lastSync: lastSync?.value ?? null,
+      lastSyncResult,
       schedulerRunning: isSchedulerRunning(),
+      syncing: isSyncing(),
     })
   } catch (err) {
     return NextResponse.json(
@@ -97,7 +103,7 @@ export async function POST(request: NextRequest) {
 export async function DELETE() {
   try {
     await prisma.setting.deleteMany({
-      where: { key: { in: ['x_auth_token', 'x_ct0', 'x_sync_interval', 'x_last_sync'] } },
+      where: { key: { in: ['x_auth_token', 'x_ct0', 'x_sync_interval', 'x_last_sync', 'x_last_sync_result'] } },
     })
     stopScheduler()
     return NextResponse.json({ deleted: true })

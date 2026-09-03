@@ -43,7 +43,7 @@ function Legend({ categories }: { categories: CategoryLegendItem[] }) {
           </div>
         ))}
       </div>
-      <p className="text-xs text-zinc-600 mt-3">Click a category to expand</p>
+      <p className="text-xs text-zinc-600 mt-3">Click a category to see its topics, then a topic to see posts</p>
     </div>
   )
 }

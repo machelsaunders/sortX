@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useRef, useEffect, useState } from 'react'
-import { ExternalLink, Download, FileText, Play, Pencil, X, Check, ImageOff, Bookmark, Globe, Heart, Repeat2, Languages } from 'lucide-react'
+import { ExternalLink, Download, FileText, Play, Pencil, X, Check, ImageOff, Bookmark, Globe, Heart, Repeat2, Languages, Sparkles, Loader2 } from 'lucide-react'
 import type { BookmarkWithMedia, Category } from '@/lib/types'
 
 // ── URL helpers ────────────────────────────────────────────────────────────────
@@ -484,6 +484,62 @@ function TopMediaSlot({ item, tweetUrl }: TopMediaSlotProps) {
   )
 }
 
+// ── Related posts (vector neighbours) ─────────────────────────────────────────
+
+interface RelatedHit extends BookmarkWithMedia { score: number }
+
+function RelatedPanel({ bookmarkId, onClose }: { bookmarkId: string; onClose: () => void }) {
+  const [items, setItems] = useState<RelatedHit[] | null>(null)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/bookmarks/${bookmarkId}/related?limit=5`)
+      .then((r) => r.json())
+      .then((d: { bookmarks?: RelatedHit[] }) => { if (!cancelled) setItems(d.bookmarks ?? []) })
+      .catch(() => { if (!cancelled) setError(true) })
+    return () => { cancelled = true }
+  }, [bookmarkId])
+
+  return (
+    <div className="mt-3 rounded-xl bg-zinc-950/60 border border-zinc-800 p-3" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1.5">
+          <Sparkles size={10} className="text-indigo-400" /> Related posts
+        </span>
+        <button onClick={onClose} className="text-zinc-600 hover:text-zinc-300"><X size={12} /></button>
+      </div>
+      {items === null && !error && (
+        <p className="text-xs text-zinc-600 flex items-center gap-1.5"><Loader2 size={11} className="animate-spin" /> Finding similar posts…</p>
+      )}
+      {error && <p className="text-xs text-zinc-600">Couldn&apos;t load related posts.</p>}
+      {items && items.length === 0 && <p className="text-xs text-zinc-600">Nothing similar enough yet. Run the AI pipeline to improve matches.</p>}
+      {items && items.length > 0 && (
+        <ul className="space-y-1.5">
+          {items.map((r) => (
+            <li key={r.id}>
+              <a
+                href={`https://x.com/${r.authorHandle}/status/${r.tweetId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block rounded-lg px-2 py-1.5 hover:bg-zinc-800/70 transition-colors"
+                title={r.text}
+              >
+                <p className="text-xs text-zinc-300 leading-snug line-clamp-2">{stripTcoUrls(r.translatedText ?? r.text) || 'No text'}</p>
+                <p className="text-[11px] text-zinc-600 mt-0.5 truncate">
+                  @{r.authorHandle}
+                  {r.categories[0] ? ` · ${r.categories[0].name}` : ''}
+                  <span className="ml-1 opacity-60">{Math.round(r.score * 100)}% similar</span>
+                </p>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 // ── Category chip ──────────────────────────────────────────────────────────────
 
 function CategoryChip({
@@ -665,6 +721,7 @@ export default function BookmarkCard({ bookmark }: BookmarkCardProps) {
   const [categories, setCategories] = useState(bookmark.categories)
   const [expanded, setExpanded] = useState(false)
   const [editingCategories, setEditingCategories] = useState(false)
+  const [showRelated, setShowRelated] = useState(false)
 
   const tweetUrl = (bookmark.authorHandle && bookmark.authorHandle !== 'unknown')
     ? `https://twitter.com/${bookmark.authorHandle}/status/${bookmark.tweetId}`
@@ -836,7 +893,14 @@ export default function BookmarkCard({ bookmark }: BookmarkCardProps) {
           </div>
 
           {/* Actions — visible on hover */}
-          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 mt-0.5">
+          <div className={`flex items-center gap-0.5 transition-opacity flex-shrink-0 mt-0.5 ${showRelated ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+            <button
+              onClick={() => setShowRelated((v) => !v)}
+              className={`p-1.5 rounded-lg transition-colors ${showRelated ? 'text-indigo-400 bg-zinc-800' : 'text-zinc-600 hover:text-zinc-200 hover:bg-zinc-800'}`}
+              title="Related posts"
+            >
+              <Sparkles size={13} />
+            </button>
             <button
               onClick={handleDownloadMarkdown}
               className="p-1.5 rounded-lg text-zinc-600 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
@@ -922,6 +986,7 @@ export default function BookmarkCard({ bookmark }: BookmarkCardProps) {
           {previewUrl && (
             <LinkPreview url={previewUrl} tweetUrl={tweetUrl} tweetId={bookmark.tweetId} prominent={!displayText} />
           )}
+          {showRelated && <RelatedPanel bookmarkId={bookmark.id} onClose={() => setShowRelated(false)} />}
         </div>
 
         {/* Footer: categories + meta — fixed two-row structure keeps all cards aligned */}

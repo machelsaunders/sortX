@@ -16,10 +16,11 @@ import { Type } from 'lucide-react'
 import RootNode from './root-node'
 import CategoryNode from './category-node'
 import TweetNode from './tweet-node'
+import TopicNode from './topic-node'
 import ChainEdge from './chain-edge'
 import { MindmapContext } from './mindmap-context'
 
-const nodeTypes = { root: RootNode, category: CategoryNode, tweet: TweetNode }
+const nodeTypes = { root: RootNode, category: CategoryNode, tweet: TweetNode, topic: TopicNode }
 const edgeTypes = { chain: ChainEdge }
 
 // Golden angle — Fibonacci/sunflower spiral for organic, non-overlapping spread
@@ -50,7 +51,7 @@ interface MindmapCanvasProps {
   initialEdges: Edge[]
 }
 
-type ViewMode = 'categories' | 'focused'
+type ViewMode = 'categories' | 'focused' | 'topic'
 
 export default function MindmapCanvas({ initialNodes, initialEdges }: MindmapCanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
@@ -83,57 +84,114 @@ export default function MindmapCanvas({ initialNodes, initialEdges }: MindmapCan
     setEdges(initialEdges)
   }, [initialNodes, initialEdges, setNodes, setEdges])
 
-  const handleNodeClick: NodeMouseHandler = useCallback(async (_, node) => {
-    if (node.type === 'root') { resetToCategories(); return }
-    if (node.type !== 'category') return
+  const [focusedTopic, setFocusedTopic] = useState<{ slug: string; index: number; categoryNode: Node } | null>(null)
 
-    const data = node.data as { slug: string; color: string }
-    const { slug, color } = data
+  function styleTweetEdges(edgesIn: Edge[], color: string): Edge[] {
+    return edgesIn.map((e) => ({
+      ...e,
+      type: 'straight',
+      style: { stroke: color, strokeWidth: 0.8, opacity: 0.25 },
+      markerEnd: undefined,
+    }))
+  }
 
-    // Toggle off
-    if (viewMode === 'focused' && focusedSlug === slug) { resetToCategories(); return }
+  /** Lay topic nodes on a ring around the category node. */
+  function layoutTopicNodes(topicNodes: Node[], center: Node): Node[] {
+    const total = topicNodes.length
+    const radius = Math.max(230, Math.round((total * 195) / (2 * Math.PI)))
+    return topicNodes.map((n, i) => {
+      const angle = (2 * Math.PI * i) / total - Math.PI / 2
+      return { ...n, position: { x: center.position.x + Math.round(radius * Math.cos(angle)), y: center.position.y + Math.round(radius * Math.sin(angle)) } }
+    })
+  }
 
+  const openCategory = useCallback(async (node: Node) => {
+    const { slug, color } = node.data as { slug: string; color: string }
     setFocusedSlug(slug)
+    setFocusedTopic(null)
     setViewMode('focused')
 
-    // Use cache
     if (tweetCache[slug]) {
       const { nodes: cn, edges: ce } = tweetCache[slug]
-      const positioned = layoutTweetNodes(cn, node)
+      const isTopics = cn.some((n) => n.type === 'topic')
+      const positioned = isTopics ? layoutTopicNodes(cn, node) : layoutTweetNodes(cn, node)
       setNodes([node, ...positioned])
       setEdges(ce)
       return
     }
 
-    // Fetch
     try {
       const res = await fetch(`/api/mindmap?category=${slug}`)
+      const { nodes: newNodes, edges: newEdges, mode } = (await res.json()) as { nodes: Node[]; edges: Edge[]; mode?: string }
+      if (mode === 'topics') {
+        const topicNodes = newNodes.filter((n) => n.type === 'topic')
+        const positioned = layoutTopicNodes(topicNodes, node)
+        setTweetCache((prev) => ({ ...prev, [slug]: { nodes: topicNodes, edges: newEdges } }))
+        setNodes([node, ...positioned])
+        setEdges(newEdges)
+      } else {
+        const tweetNodes = newNodes.filter((n) => n.type === 'tweet')
+        const positioned = layoutTweetNodes(tweetNodes, node)
+        const styledEdges = styleTweetEdges(newEdges, color)
+        setTweetCache((prev) => ({ ...prev, [slug]: { nodes: tweetNodes, edges: styledEdges } }))
+        setNodes([node, ...positioned])
+        setEdges(styledEdges)
+      }
+    } catch (err) {
+      console.error('Failed to load category:', err)
+    }
+  }, [tweetCache, setNodes, setEdges])
+
+  const openTopic = useCallback(async (topicNode: Node, categoryNode: Node) => {
+    const { slug, index, color } = topicNode.data as { slug: string; index: number; color: string }
+    const key = `${slug}#${index}`
+    setFocusedTopic({ slug, index, categoryNode })
+    setViewMode('topic')
+    const centered: Node = { ...topicNode, position: categoryNode.position }
+
+    if (tweetCache[key]) {
+      const { nodes: cn, edges: ce } = tweetCache[key]
+      setNodes([centered, ...layoutTweetNodes(cn, centered)])
+      setEdges(ce)
+      return
+    }
+    try {
+      const res = await fetch(`/api/mindmap?category=${slug}&topic=${index}`)
       const { nodes: newNodes, edges: newEdges } = (await res.json()) as { nodes: Node[]; edges: Edge[] }
       const tweetNodes = newNodes.filter((n) => n.type === 'tweet')
-      const positioned = layoutTweetNodes(tweetNodes, node)
-
-      // Style edges: faint straight lines for tweet connections
-      const styledEdges = (newEdges as Edge[]).map((e) => ({
-        ...e,
-        type: 'straight',
-        style: { stroke: color, strokeWidth: 0.8, opacity: 0.25 },
-        markerEnd: undefined,
-      }))
-
-      setTweetCache((prev) => ({ ...prev, [slug]: { nodes: tweetNodes, edges: styledEdges } }))
-      setNodes([node, ...positioned])
+      const styledEdges = styleTweetEdges(newEdges, color)
+      setTweetCache((prev) => ({ ...prev, [key]: { nodes: tweetNodes, edges: styledEdges } }))
+      setNodes([centered, ...layoutTweetNodes(tweetNodes, centered)])
       setEdges(styledEdges)
     } catch (err) {
-      console.error('Failed to load category tweets:', err)
+      console.error('Failed to load topic:', err)
     }
-  }, [viewMode, focusedSlug, tweetCache, setNodes, setEdges, resetToCategories])
+  }, [tweetCache, setNodes, setEdges])
+
+  const backToTopics = useCallback(() => {
+    if (!focusedTopic) return resetToCategories()
+    void openCategory(focusedTopic.categoryNode)
+  }, [focusedTopic, openCategory, resetToCategories])
+
+  const handleNodeClick: NodeMouseHandler = useCallback(async (_, node) => {
+    if (node.type === 'root') { resetToCategories(); return }
+    if (node.type === 'topic') {
+      const categoryNode = nodes.find((n) => n.type === 'category') ?? focusedTopic?.categoryNode
+      if (categoryNode) await openTopic(node, categoryNode)
+      return
+    }
+    if (node.type !== 'category') return
+    const { slug } = node.data as { slug: string }
+    if (viewMode === 'focused' && focusedSlug === slug) { resetToCategories(); return }
+    await openCategory(node)
+  }, [nodes, viewMode, focusedSlug, focusedTopic, openCategory, openTopic, resetToCategories])
 
   return (
     <MindmapContext.Provider value={{ showLabels }}>
     <div className="relative w-full h-full">
       {/* Top-left controls */}
       <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
-        {viewMode === 'focused' && (
+        {viewMode !== 'categories' && (
           <button
             onClick={resetToCategories}
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-900/90 border border-zinc-700 text-zinc-300 text-sm hover:bg-zinc-800 hover:text-zinc-100 transition-colors backdrop-blur-sm"
@@ -141,7 +199,15 @@ export default function MindmapCanvas({ initialNodes, initialEdges }: MindmapCan
             ← All categories
           </button>
         )}
-        {viewMode === 'focused' && (
+        {viewMode === 'topic' && (
+          <button
+            onClick={backToTopics}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-900/90 border border-zinc-700 text-zinc-300 text-sm hover:bg-zinc-800 hover:text-zinc-100 transition-colors backdrop-blur-sm"
+          >
+            ← Topics
+          </button>
+        )}
+        {viewMode !== 'categories' && (
           <button
             onClick={() => setShowLabels((v) => !v)}
             title={showLabels ? 'Hide labels' : 'Show labels'}

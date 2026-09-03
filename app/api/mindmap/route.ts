@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/db'
+import { getCategoryTopics } from '@/lib/topics'
 
 interface MindMapNode {
   id: string
@@ -101,7 +102,10 @@ async function getBaseGraph(): Promise<MindMapResponse> {
   }
 }
 
-async function getCategoryTweetNodes(categorySlug: string): Promise<MindMapResponse> {
+async function getCategoryTweetNodes(
+  categorySlug: string,
+  options: { onlyIds?: string[]; parentId?: string } = {},
+): Promise<MindMapResponse> {
   const category = await prisma.category.findUnique({
     where: { slug: categorySlug },
     include: {
@@ -114,7 +118,10 @@ async function getCategoryTweetNodes(categorySlug: string): Promise<MindMapRespo
   }
 
   const bookmarkCategories = await prisma.bookmarkCategory.findMany({
-    where: { category: { slug: categorySlug } },
+    where: {
+      category: { slug: categorySlug },
+      ...(options.onlyIds ? { bookmarkId: { in: options.onlyIds } } : {}),
+    },
     select: {
       confidence: true,
       bookmark: {
@@ -139,8 +146,8 @@ async function getCategoryTweetNodes(categorySlug: string): Promise<MindMapRespo
 
   const bookmarks = bookmarkCategories.map((bc) => ({ ...bc.bookmark, confidence: bc.confidence }))
 
-  const catNodeId = `cat-${categorySlug}`
-  const catPos = { x: 0, y: 0 } // Position relative to the category
+  const catNodeId = options.parentId ?? `cat-${categorySlug}`
+  const catPos = { x: 0, y: 0 } // Position relative to the parent node
 
   const tweetNodes: MindMapNode[] = bookmarks.map((bookmark, index) => {
     const truncatedText =
@@ -195,14 +202,55 @@ async function getCategoryTweetNodes(categorySlug: string): Promise<MindMapRespo
   }
 }
 
+const TOPIC_NODE_WIDTH = 150
+const TOPIC_NODE_GAP = 44
+
+async function getCategoryTopicNodes(categorySlug: string, force: boolean): Promise<MindMapResponse | null> {
+  const category = await prisma.category.findUnique({ where: { slug: categorySlug }, select: { color: true, name: true } })
+  if (!category) return null
+  const result = await getCategoryTopics(categorySlug, force)
+  if (!result || result.topics.length < 2) return null
+
+  const total = result.topics.length
+  const radius = Math.max(220, Math.round((total * (TOPIC_NODE_WIDTH + TOPIC_NODE_GAP)) / (2 * Math.PI)))
+  const nodes: MindMapNode[] = result.topics.map((t, index) => ({
+    id: `topic-${categorySlug}-${t.index}`,
+    type: 'topic',
+    data: { name: t.name, size: t.size, index: t.index, slug: categorySlug, color: category.color },
+    position: categoryPosition(index, total, radius),
+  }))
+  const edges: MindMapEdge[] = result.topics.map((t) => ({
+    id: `edge-cat-${categorySlug}-topic-${t.index}`,
+    source: `cat-${categorySlug}`,
+    target: `topic-${categorySlug}-${t.index}`,
+    type: 'chain',
+    style: { stroke: category.color, strokeWidth: 1.2, opacity: 0.8 },
+  }))
+  return { nodes, edges }
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const { searchParams } = new URL(request.url)
   const categorySlug = searchParams.get('category')
+  const topicParam = searchParams.get('topic')
+  const force = searchParams.get('refresh') === '1'
 
   try {
-    if (categorySlug) {
-      const data = await getCategoryTweetNodes(categorySlug)
+    if (categorySlug && topicParam !== null) {
+      // Posts inside one topic cluster
+      const topics = await getCategoryTopics(categorySlug)
+      const topic = topics?.topics.find((t) => t.index === parseInt(topicParam, 10))
+      if (!topic) return NextResponse.json({ nodes: [], edges: [] })
+      const data = await getCategoryTweetNodes(categorySlug, { onlyIds: topic.ids, parentId: `topic-${categorySlug}-${topic.index}` })
       return NextResponse.json(data)
+    }
+
+    if (categorySlug) {
+      // Big categories get topic clusters; small ones show posts directly
+      const topicGraph = await getCategoryTopicNodes(categorySlug, force)
+      if (topicGraph) return NextResponse.json({ ...topicGraph, mode: 'topics' })
+      const data = await getCategoryTweetNodes(categorySlug)
+      return NextResponse.json({ ...data, mode: 'tweets' })
     }
 
     const data = await getBaseGraph()

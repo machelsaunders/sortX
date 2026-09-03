@@ -1,31 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import {
-  Eye,
-  EyeOff,
-  Download,
-  Check,
-  AlertCircle,
-  Key,
-  Database,
-  Info,
-  Trash2,
-  Shield,
-  ExternalLink,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  Zap,
-  Copy,
-  Coffee,
-  Terminal,
-  Loader2,
-  X,
-  BookOpen,
-  Folder,
-  FolderOpen,
-} from 'lucide-react'
+import { Eye, EyeOff, Download, Check, AlertCircle, Key, Database, Info, Trash2, Shield, ExternalLink, ChevronDown, ChevronRight, ChevronUp, Zap, Copy, Coffee, Terminal, Loader2, X, BookOpen, Folder, FolderOpen, RefreshCw, Cookie } from 'lucide-react'
 
 const ANTHROPIC_MODELS = [
   { value: 'claude-haiku-4-5', label: 'Haiku 4.5', description: 'Fast & cheap — best for bulk runs' },
@@ -1136,6 +1112,174 @@ function AboutSection() {
   )
 }
 
+function XSyncSection({ onToast }: { onToast: (t: Toast) => void }) {
+  interface SyncStatus {
+    hasCredentials: boolean
+    syncInterval: string
+    lastSync: string | null
+    lastSyncResult: { imported: number; skipped: number; at: string } | null
+    schedulerRunning: boolean
+    syncing: boolean
+  }
+  const [status, setStatus] = useState<SyncStatus | null>(null)
+  const [authToken, setAuthToken] = useState('')
+  const [ct0, setCt0] = useState('')
+  const [interval, setIntervalValue] = useState('off')
+  const [saving, setSaving] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
+
+  const load = useCallback(() => {
+    fetch('/api/import/live')
+      .then((r) => r.json())
+      .then((d: SyncStatus) => { setStatus(d); setIntervalValue(d.syncInterval ?? 'off') })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function handleSave() {
+    const hasCreds = authToken.trim() && ct0.trim()
+    if ((authToken.trim() || ct0.trim()) && !hasCreds) {
+      onToast({ type: 'error', message: 'Both auth_token and ct0 are needed' })
+      return
+    }
+    if (!hasCreds && !status?.hasCredentials) {
+      onToast({ type: 'error', message: 'Paste your X cookies first' })
+      return
+    }
+    setSaving(true)
+    try {
+      const payload: Record<string, string> = { syncInterval: interval }
+      if (hasCreds) { payload.authToken = authToken.trim(); payload.ct0 = ct0.trim() }
+      const res = await fetch('/api/import/live', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      if (!res.ok) { const d = (await res.json().catch(() => ({}))) as { error?: string }; throw new Error(d.error ?? 'Failed to save') }
+      setAuthToken(''); setCt0('')
+      onToast({ type: 'success', message: interval === 'off' ? 'Saved. Automatic sync is off.' : `Saved. Syncing every ${interval}.` })
+      load()
+    } catch (err) {
+      onToast({ type: 'error', message: err instanceof Error ? err.message : 'Failed to save' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleSyncNow(full = false) {
+    setSyncing(true)
+    try {
+      const res = await fetch('/api/import/live/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ full }) })
+      const d = (await res.json()) as { imported?: number; skipped?: number; error?: string }
+      if (!res.ok) throw new Error(d.error ?? 'Sync failed')
+      onToast({ type: 'success', message: `Sync done: ${d.imported ?? 0} new, ${d.skipped ?? 0} already saved` })
+      load()
+    } catch (err) {
+      onToast({ type: 'error', message: err instanceof Error ? err.message : 'Sync failed' })
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  async function handleRemove() {
+    if (!confirm('Remove the saved X cookies and stop automatic sync?')) return
+    await fetch('/api/import/live', { method: 'DELETE' })
+    onToast({ type: 'success', message: 'X sync removed' })
+    load()
+  }
+
+  const lastSyncText = status?.lastSync
+    ? new Date(status.lastSync).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+    : null
+
+  return (
+    <Section
+      icon={RefreshCw}
+      title="Automatic X sync"
+      description="Pull new bookmarks on a schedule using your X session, no clicking required"
+    >
+      <div className="space-y-4">
+        {/* Status */}
+        <div className={`flex items-center gap-3 px-3.5 py-3 rounded-xl border text-sm ${status?.hasCredentials ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-zinc-800/50 border-zinc-700/50'}`}>
+          <span className={`w-2 h-2 rounded-full shrink-0 ${status?.hasCredentials ? (status.schedulerRunning ? 'bg-emerald-400' : 'bg-amber-400') : 'bg-zinc-600'}`} />
+          <div className="min-w-0 flex-1">
+            {status?.hasCredentials ? (
+              <p className="text-zinc-200">
+                Connected · {status.schedulerRunning ? `syncing every ${status.syncInterval}` : 'automatic sync off'}
+                {lastSyncText && <span className="text-zinc-500"> · last sync {lastSyncText}</span>}
+                {status.lastSyncResult && <span className="text-zinc-500"> ({status.lastSyncResult.imported} new)</span>}
+              </p>
+            ) : (
+              <p className="text-zinc-400">Not connected. Paste two cookies from x.com below.</p>
+            )}
+          </div>
+          {status?.hasCredentials && (
+            <button onClick={() => void handleSyncNow(false)} disabled={syncing || status.syncing} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold transition-colors shrink-0">
+              <RefreshCw size={12} className={syncing || status.syncing ? 'animate-spin' : ''} />
+              {syncing || status.syncing ? 'Syncing…' : 'Sync now'}
+            </button>
+          )}
+        </div>
+
+        {/* How to get cookies */}
+        <button onClick={() => setShowHelp((v) => !v)} className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors">
+          <ChevronDown size={12} className={`transition-transform ${showHelp ? '' : '-rotate-90'}`} />
+          Where do I find auth_token and ct0?
+        </button>
+        {showHelp && (
+          <ol className="text-xs text-zinc-500 space-y-1 pl-4 list-decimal">
+            <li>Open <span className="text-zinc-300">x.com</span> logged in, then DevTools (⌥⌘I on Mac, F12 elsewhere).</li>
+            <li>Go to <span className="text-zinc-300">Application → Cookies → https://x.com</span> (Safari: Storage → Cookies).</li>
+            <li>Copy the <span className="text-zinc-300">Value</span> of <code className="text-zinc-300">auth_token</code> and of <code className="text-zinc-300">ct0</code> and paste them below.</li>
+            <li>They stay in this app&apos;s local database only. Logging out of X invalidates them; paste fresh ones if sync stops.</li>
+          </ol>
+        )}
+
+        {/* Inputs */}
+        <div className="grid sm:grid-cols-2 gap-3">
+          <label className="block">
+            <span className="text-xs text-zinc-500 mb-1 block">auth_token</span>
+            <input type="password" value={authToken} onChange={(e) => setAuthToken(e.target.value)} placeholder={status?.hasCredentials ? '•••••••• (saved)' : 'paste value'} autoComplete="off"
+              className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-700 text-zinc-100 text-sm font-mono focus:outline-none focus:border-indigo-500" />
+          </label>
+          <label className="block">
+            <span className="text-xs text-zinc-500 mb-1 block">ct0</span>
+            <input type="password" value={ct0} onChange={(e) => setCt0(e.target.value)} placeholder={status?.hasCredentials ? '•••••••• (saved)' : 'paste value'} autoComplete="off"
+              className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-700 text-zinc-100 text-sm font-mono focus:outline-none focus:border-indigo-500" />
+          </label>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-zinc-400">
+            Check for new bookmarks
+            <select value={interval} onChange={(e) => setIntervalValue(e.target.value)} className="px-2.5 py-1.5 rounded-lg bg-zinc-950 border border-zinc-700 text-zinc-200 text-sm focus:outline-none focus:border-indigo-500">
+              <option value="off">manually only</option>
+              <option value="1h">every hour</option>
+              <option value="4h">every 4 hours</option>
+              <option value="8h">every 8 hours</option>
+              <option value="24h">once a day</option>
+            </select>
+          </label>
+          <button onClick={() => void handleSave()} disabled={saving} className="px-4 py-2 rounded-lg bg-zinc-100 hover:bg-white disabled:opacity-50 text-zinc-900 text-sm font-semibold transition-colors">
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          {status?.hasCredentials && (
+            <>
+              <button onClick={() => void handleSyncNow(true)} disabled={syncing} className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors" title="Walk the entire bookmark list instead of stopping at the first known page">
+                Full re-sync
+              </button>
+              <button onClick={() => void handleRemove()} className="ml-auto text-xs text-red-400/80 hover:text-red-300 transition-colors">
+                Remove
+              </button>
+            </>
+          )}
+        </div>
+        <p className="text-[11px] text-zinc-600">
+          A scheduled sync fetches only the newest pages and stops as soon as it reaches posts you already have, then runs the AI pipeline on anything new.
+        </p>
+      </div>
+    </Section>
+  )
+}
+
 function XOAuthSection({ onToast }: { onToast: (t: Toast) => void }) {
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
@@ -1312,6 +1456,7 @@ export default function SettingsPage() {
 
       <div className="space-y-4">
         <ApiKeySection onToast={showToast} />
+        <XSyncSection onToast={showToast} />
         <XOAuthSection onToast={showToast} />
         <DataSection />
         <ObsidianExportBlock onToast={showToast} />

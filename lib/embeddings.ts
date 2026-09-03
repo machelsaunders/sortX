@@ -369,6 +369,27 @@ export async function vectorSearch(query: string, limit = 200, minScore = 0.6, w
   }
 }
 
+/** Bookmarks whose vectors are closest to the given bookmark's vector. */
+export async function relatedByVector(bookmarkId: string, limit = 6, minScore = 0.55): Promise<VectorHit[]> {
+  if (DISABLED) return []
+  try {
+    const cache = await loadVectors()
+    const idx = cache.ids.indexOf(bookmarkId)
+    if (idx === -1) return []
+    const q = cache.vectors[idx]
+    const hits: VectorHit[] = []
+    for (let i = 0; i < cache.ids.length; i++) {
+      if (i === idx) continue
+      const score = dot(q, cache.vectors[i])
+      if (score >= minScore) hits.push({ id: cache.ids[i], score })
+    }
+    return topN(hits, limit)
+  } catch (err) {
+    console.warn('[embeddings] related lookup failed:', err instanceof Error ? err.message : err)
+    return []
+  }
+}
+
 /** Warm the model in the background so the first search is fast. */
 export function warmEmbeddingModel(): void {
   if (DISABLED || state.modelStatus !== 'unloaded') return

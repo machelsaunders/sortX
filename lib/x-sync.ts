@@ -6,7 +6,9 @@ import { fetchPage, parsePage, importTweets } from '@/lib/twitter-api'
 export async function syncBookmarks(
   authToken: string,
   ct0: string,
+  options: { full?: boolean } = {},
 ): Promise<{ imported: number; skipped: number }> {
+  const full = options.full === true
   if (syncing) throw new Error('A sync is already in progress')
   syncing = true
 
@@ -16,6 +18,7 @@ export async function syncBookmarks(
     let cursor: string | undefined
     const MAX_PAGES = 50
 
+    let knownPages = 0
     for (let page = 0; page < MAX_PAGES; page++) {
       const data = await fetchPage(authToken, ct0, cursor)
       const { tweets, nextCursor } = parsePage(data)
@@ -34,6 +37,14 @@ export async function syncBookmarks(
       skipped += result.skipped
 
       if (!nextCursor || tweets.length === 0) break
+      // Bookmarks come newest-first: once two consecutive pages contain nothing
+      // new we have caught up, so a scheduled sync costs 2-3 requests, not 70.
+      if (!full && result.imported === 0 && tweets.length > 0) {
+        knownPages++
+        if (knownPages >= 2) break
+      } else {
+        knownPages = 0
+      }
       cursor = nextCursor
 
       if (page === MAX_PAGES - 1) {
@@ -49,6 +60,21 @@ export async function syncBookmarks(
         update: { value: now },
         create: { key: 'x_last_sync', value: now },
       })
+      await prisma.setting.upsert({
+        where: { key: 'x_last_sync_result' },
+        update: { value: JSON.stringify({ imported, skipped, at: now }) },
+        create: { key: 'x_last_sync_result', value: JSON.stringify({ imported, skipped, at: now }) },
+      })
+    }
+
+    // New posts → run the AI pipeline for them (best effort, in the background)
+    if (imported > 0) {
+      const port = process.env.PORT ?? '3000'
+      void fetch(`http://localhost:${port}/api/categorize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      }).catch(() => { /* pipeline may already be running */ })
     }
 
     return { imported, skipped }
