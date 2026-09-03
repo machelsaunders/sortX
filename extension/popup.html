@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { width: 300px; margin: 0; padding: 14px; font: 13px/1.4 -apple-system, system-ui, sans-serif; background: #0f0f14; color: #e4e4e7; }
+  h1 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  h1 span { color: #F5A623; }
+  label { display: block; font-size: 11px; color: #a1a1aa; margin: 10px 0 4px; }
+  input, select { width: 100%; box-sizing: border-box; padding: 7px 8px; border-radius: 8px; border: 1px solid #3f3f46; background: #18181b; color: #e4e4e7; font-size: 13px; }
+  .row { display: flex; gap: 8px; margin-top: 12px; }
+  button { flex: 1; padding: 8px; border-radius: 8px; border: 1px solid #3f3f46; background: #18181b; color: #e4e4e7; cursor: pointer; font-weight: 600; }
+  button.primary { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+  .status { margin-top: 12px; padding: 8px 10px; border-radius: 8px; background: #18181b; border: 1px solid #27272a; font-size: 12px; color: #a1a1aa; }
+  .status b { color: #e4e4e7; }
+  .err { color: #fca5a5; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: #a1a1aa; }
+  .check input { width: auto; }
+</style>
+</head>
+<body>
+  <h1>sort<span>X</span> Sync</h1>
+  <label>sortX address</label>
+  <input id="url" placeholder="http://localhost:3000">
+  <label>Check for new posts</label>
+  <select id="interval">
+    <option value="0">manually only</option>
+    <option value="15">every 15 minutes</option>
+    <option value="60">every hour</option>
+    <option value="240">every 4 hours</option>
+    <option value="1440">once a day</option>
+  </select>
+  <div class="check"><input type="checkbox" id="likes"> <label for="likes" style="margin:0">Sync likes instead of bookmarks</label></div>
+  <div class="row">
+    <button id="save">Save</button>
+    <button id="sync" class="primary">Sync now</button>
+  </div>
+  <div class="row"><button id="full" style="font-weight:500;font-size:12px">Full re-sync (walk everything)</button></div>
+  <div class="status" id="status">Loading…</div>
+  <script src="popup.js"></script>
+</body>
+</html>

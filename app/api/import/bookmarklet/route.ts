@@ -6,10 +6,11 @@ const ALLOWED_ORIGINS = new Set(['https://x.com', 'https://twitter.com', 'https:
 
 function corsHeaders(request: NextRequest) {
   const origin = request.headers.get('Origin') ?? ''
-  const allowed = ALLOWED_ORIGINS.has(origin) ? origin : 'https://x.com'
+  // x.com pages (bookmarklet fallback) and the sortX Sync browser extension
+  const allowed = ALLOWED_ORIGINS.has(origin) || /^(chrome|moz|safari-web)-extension:\/\//.test(origin) ? origin : 'https://x.com'
   return {
     'Access-Control-Allow-Origin': allowed,
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     Vary: 'Origin',
   }

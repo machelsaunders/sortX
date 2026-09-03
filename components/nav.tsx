@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import ThemeToggle from './theme-toggle'
 import {
   LayoutDashboard,
@@ -77,6 +77,15 @@ const PIPELINE_STAGE_LABELS: Record<string, string> = {
   index: 'Indexing for search',
 }
 
+function subscribeToStorage(callback: () => void): () => void {
+  window.addEventListener('storage', callback)
+  window.addEventListener('sortx:storage', callback)
+  return () => {
+    window.removeEventListener('storage', callback)
+    window.removeEventListener('sortx:storage', callback)
+  }
+}
+
 function Brand() {
   return (
     <Link href="/" className="flex items-center gap-2.5 min-w-0">
@@ -94,18 +103,18 @@ export default function Nav() {
   const [categories, setCategories] = useState<CategoryItem[]>([])
   const [showAllCats, setShowAllCats] = useState(true)
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [collectionsOpen, setCollectionsOpen] = useState(() => {
-    if (typeof window === 'undefined') return true
-    return localStorage.getItem('nav-collections-open') !== 'false'
-  })
+  // Read the persisted preference without a hydration mismatch: the server
+  // snapshot is always "open", the client snapshot comes from localStorage.
+  const collectionsOpen = useSyncExternalStore(
+    subscribeToStorage,
+    () => { try { return localStorage.getItem('nav-collections-open') !== 'false' } catch { return true } },
+    () => true,
+  )
   const [pipeline, setPipeline] = useState<PipelineStatus | null>(null)
 
   function toggleCollections() {
-    setCollectionsOpen((v) => {
-      const next = !v
-      localStorage.setItem('nav-collections-open', String(next))
-      return next
-    })
+    try { localStorage.setItem('nav-collections-open', String(!collectionsOpen)) } catch { /* ignore */ }
+    window.dispatchEvent(new Event('sortx:storage'))
   }
 
   function openSearch() {

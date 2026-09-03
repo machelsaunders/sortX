@@ -12,7 +12,7 @@ import {
   type NodeMouseHandler,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Type } from 'lucide-react'
+import { Type, FolderPlus, Loader2 } from 'lucide-react'
 import RootNode from './root-node'
 import CategoryNode from './category-node'
 import TweetNode from './tweet-node'
@@ -49,11 +49,13 @@ function layoutTweetNodes(nodes: Node[], center: Node): Node[] {
 interface MindmapCanvasProps {
   initialNodes: Node[]
   initialEdges: Edge[]
+  /** Called after the category set changes (e.g. a topic was promoted) so the page can refetch */
+  onGraphChanged?: () => void
 }
 
 type ViewMode = 'categories' | 'focused' | 'topic'
 
-export default function MindmapCanvas({ initialNodes, initialEdges }: MindmapCanvasProps) {
+export default function MindmapCanvas({ initialNodes, initialEdges, onGraphChanged }: MindmapCanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
   const [viewMode, setViewMode] = useState<ViewMode>('categories')
@@ -168,6 +170,33 @@ export default function MindmapCanvas({ initialNodes, initialEdges }: MindmapCan
     }
   }, [tweetCache, setNodes, setEdges])
 
+  const [promoting, setPromoting] = useState(false)
+  const promoteTopic = useCallback(async () => {
+    if (!focusedTopic || promoting) return
+    const topicNode = nodes.find((n) => n.type === 'topic')
+    const currentName = (topicNode?.data as { name?: string } | undefined)?.name ?? 'New category'
+    const name = window.prompt('Create a category from this topic. Name:', currentName)
+    if (!name) return
+    setPromoting(true)
+    try {
+      const res = await fetch('/api/categories/from-topic', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug: focusedTopic.slug, topicIndex: focusedTopic.index, name }),
+      })
+      const d = (await res.json()) as { error?: string; moved?: number; category?: { name: string } }
+      if (!res.ok) throw new Error(d.error ?? 'Failed')
+      setTweetCache({})
+      resetToCategories()
+      onGraphChanged?.()
+      window.alert(`Created "${d.category?.name}" and moved ${d.moved} posts into it.`)
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Could not create the category')
+    } finally {
+      setPromoting(false)
+    }
+  }, [focusedTopic, promoting, nodes, resetToCategories, onGraphChanged])
+
   const backToTopics = useCallback(() => {
     if (!focusedTopic) return resetToCategories()
     void openCategory(focusedTopic.categoryNode)
@@ -205,6 +234,17 @@ export default function MindmapCanvas({ initialNodes, initialEdges }: MindmapCan
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-900/90 border border-zinc-700 text-zinc-300 text-sm hover:bg-zinc-800 hover:text-zinc-100 transition-colors backdrop-blur-sm"
           >
             ← Topics
+          </button>
+        )}
+        {viewMode === 'topic' && (
+          <button
+            onClick={() => void promoteTopic()}
+            disabled={promoting}
+            title="Turn this topic into its own category and move these posts into it"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/90 border border-indigo-500 text-white text-sm hover:bg-indigo-500 disabled:opacity-50 transition-colors backdrop-blur-sm"
+          >
+            {promoting ? <Loader2 size={13} className="animate-spin" /> : <FolderPlus size={13} />}
+            Make this a category
           </button>
         )}
         {viewMode !== 'categories' && (

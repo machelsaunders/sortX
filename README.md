@@ -46,7 +46,8 @@ Each of those is understood, not just keyword-matched: authors, time ranges, med
 | Video | Link out to X | **Plays inline** on the card (proxy fallback), GIFs loop |
 | Related posts | — | Sparkle button on every card shows the nearest posts by meaning (local vectors, instant) |
 | Automatic sync | Cookie sync existed as an API only, with a hardcoded query ID | **Settings → Automatic X sync**: paste two cookies once, pick an interval; incremental (stops at the first known page), survives restarts, runs the pipeline on new posts |
-| Mindmap | Category → up to 66 posts | Category → **named topic clusters** (k-means over embeddings, named by the model) → posts |
+| Mindmap | Category → up to 66 posts | Category → **named topic clusters** (k-means over embeddings, named by the model) → posts; **Make this a category** promotes a topic and moves its posts |
+| Extension | — | `extension/` folder: **sortX Sync** browser extension for zero-setup automatic sync |
 | Pipeline | 4 stages | 5 stages — a final indexing stage keeps the search indexes in sync with new tags and categories |
 | Mobile | Fixed desktop sidebar | Responsive: top bar + slide-out drawer on phones and tablets |
 | Build | `next build` failed on `main` (two type errors) | Builds clean; CLI and tests cover the parser, ranking, and query understanding |
@@ -126,7 +127,11 @@ The pipeline is incremental. Interrupt it and it picks up where it stopped.
 
 ## Automatic sync
 
-Settings → **Automatic X sync**. Copy the `auth_token` and `ct0` cookie values from x.com (DevTools → Application → Cookies), paste them once, choose hourly to daily. Each run fetches the newest pages and stops as soon as it hits posts you already have, so it costs two or three requests, then runs the AI pipeline on anything new. The schedule is restored when the server restarts. Cookies live only in your local database; log out of X and they stop working.
+Two options.
+
+**Browser extension (easiest).** Load the `extension/` folder as an unpacked extension in Chrome, Edge, Brave, or Arc (`chrome://extensions` → Developer mode → Load unpacked). It uses the X session already in your browser, checks on the interval you pick, sends only new posts to sortX, and kicks off the AI pipeline. Nothing to copy. See [extension/README.md](extension/README.md).
+
+**Cookie sync (server-side).** Settings → **Automatic X sync**. Copy the `auth_token` and `ct0` cookie values from x.com (DevTools → Application → Cookies), paste them once, choose hourly to daily. Each run fetches the newest pages and stops as soon as it hits posts you already have, so it costs two or three requests, then runs the AI pipeline on anything new. The schedule is restored when the server restarts. Cookies live only in your local database; log out of X and they stop working.
 
 ## Translation and video
 

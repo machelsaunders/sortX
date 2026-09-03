@@ -328,6 +328,8 @@ export default function MindmapPage() {
   const [pipeline, setPipeline] = useState<CategorizeStatus | null>(null)
   const [overlayDismissed, setOverlayDismissed] = useState(false)
 
+  const [reloadKey, setReloadKey] = useState(0)
+
   useEffect(() => {
     Promise.all([
       fetch('/api/mindmap').then((r) => {
@@ -344,7 +346,7 @@ export default function MindmapPage() {
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Unknown error'))
       .finally(() => setLoading(false))
-  }, [])
+  }, [reloadKey])
 
   if (loading) {
     return (
@@ -392,7 +394,7 @@ export default function MindmapPage() {
   return (
     <div className="relative w-full h-screen">
       <Legend categories={legend} />
-      <MindmapCanvas initialNodes={data.nodes} initialEdges={data.edges} />
+      <MindmapCanvas initialNodes={data.nodes} initialEdges={data.edges} onGraphChanged={() => setReloadKey((k) => k + 1)} />
       {showOverlay && (
         <MindmapOverlay
           totalBookmarks={totalBookmarks}

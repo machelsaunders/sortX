@@ -72,6 +72,8 @@ prisma/schema.prisma    Bookmark (+quotedText, like/retweet/reply/view counts, l
 - Related posts: `relatedByVector()` in `lib/embeddings.ts`, `GET /api/bookmarks/[id]/related`.
 - Topic map: `lib/topics.ts` clusters a category's vectors (k-means, k = clamp(sqrt(n/4), 3, 12)), names clusters with one model call, caches in Setting `topics_<slug>` keyed by membership hash. `GET /api/mindmap?category=slug` returns `mode: 'topics' | 'tweets'`; `&topic=i` returns a cluster's posts.
 - Scheduled sync: `lib/x-sync.ts` + `instrumentation.ts` (restores the timer on boot); Settings UI is `XSyncSection` in `app/settings/page.tsx`.
+- Promote a topic to a category: `POST /api/categories/from-topic { slug, topicIndex, name? }` (mindmap button); moves the posts and invalidates the parent's topic cache via membership hash.
+- Browser extension in `extension/` (MV3): service worker fetches X GraphQL with the browser session and posts to `/api/import/bookmarklet`; extension origins are allowed by CORS there and on `/api/import/x-ids`.
 - Re-categorize a category: `POST /api/categorize { category: slug, replaceCategories: true }` (button on the category page). Full pass: `{ force: true, replaceCategories: true }`.
 
 ## Conventions
