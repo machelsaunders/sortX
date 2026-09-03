@@ -44,6 +44,9 @@ Each of those is understood, not just keyword-matched: authors, time ranges, med
 | Categories | 12 tech-leaning defaults; General was a dumping ground | 22 defaults incl. sports, watches & style, music, movies & TV, inspiration, culture & society, travel & food, art, gaming; General is a last resort; **Re-categorize** any category in one click |
 | Translation | — | Non-English posts translated to English (cached), searchable in English, toggle to original on the card |
 | Video | Link out to X | **Plays inline** on the card (proxy fallback), GIFs loop |
+| Related posts | — | Sparkle button on every card shows the nearest posts by meaning (local vectors, instant) |
+| Automatic sync | Cookie sync existed as an API only, with a hardcoded query ID | **Settings → Automatic X sync**: paste two cookies once, pick an interval; incremental (stops at the first known page), survives restarts, runs the pipeline on new posts |
+| Mindmap | Category → up to 66 posts | Category → **named topic clusters** (k-means over embeddings, named by the model) → posts |
 | Pipeline | 4 stages | 5 stages — a final indexing stage keeps the search indexes in sync with new tags and categories |
 | Mobile | Fixed desktop sidebar | Responsive: top bar + slide-out drawer on phones and tablets |
 | Build | `next build` failed on `main` (two type errors) | Builds clean; CLI and tests cover the parser, ranking, and query understanding |
@@ -121,6 +124,10 @@ Import starts the pipeline automatically. Stages:
 
 The pipeline is incremental. Interrupt it and it picks up where it stopped.
 
+## Automatic sync
+
+Settings → **Automatic X sync**. Copy the `auth_token` and `ct0` cookie values from x.com (DevTools → Application → Cookies), paste them once, choose hourly to daily. Each run fetches the newest pages and stops as soon as it hits posts you already have, so it costs two or three requests, then runs the AI pipeline on anything new. The schedule is restored when the server restarts. Cookies live only in your local database; log out of X and they stop working.
+
 ## Translation and video
 
 Posts whose language isn't English are translated once (during the pipeline, or on demand from the card's **Translate** link) and cached. The translation is indexed for keyword and semantic search, so "free kick" finds the Spanish post too. Cards play X videos and GIFs inline; if the browser can't load X's CDN directly the player retries through sortX's media proxy.
@@ -175,6 +182,9 @@ lib/
   tweet-normalize.ts      X GraphQL tweet → ParsedBookmark (pure)
   x-query-ids.ts          discovers X's current GraphQL query IDs from public bundles (cached 24h)
   x-direct-import-script.ts  builds the in-page importer (bookmarklet / console)
+  topics.ts               k-means topic clusters per category, named by the model, cached in Setting
+  translate.ts            batched + on-demand English translations
+  x-sync.ts               scheduled incremental cookie sync (started from instrumentation.ts)
   parser.ts               every JSON export format → ParsedBookmark (pure)
   import-bookmarks.ts     bulk dedupe + transactional writes + immediate indexing
   serialize-bookmark.ts   one shape for bookmark JSON across routes

@@ -61,9 +61,18 @@ lib/
   query-parser.ts hybrid-search.ts embeddings.ts fts.ts rank.ts
   tweet-normalize.ts parser.ts import-bookmarks.ts serialize-bookmark.ts
   categorizer.ts vision-analyzer.ts rawjson-extractor.ts twitter-api.ts x-sync.ts
+  translate.ts topics.ts x-query-ids.ts x-direct-import-script.ts
   ai-client.ts settings.ts claude-cli*.ts openai-auth.ts minimax-auth.ts codex-cli.ts
 prisma/schema.prisma    Bookmark (+quotedText, like/retweet/reply/view counts, lang), BookmarkEmbedding, Category, BookmarkCategory, MediaItem, ImportJob, Setting
 ```
+
+## Other subsystems
+
+- Translation: `lib/translate.ts`; pipeline translates non-English chunks, `POST /api/bookmarks/[id]/translate` on demand; `translatedText` is indexed (FTS column `translated`, embedding doc).
+- Related posts: `relatedByVector()` in `lib/embeddings.ts`, `GET /api/bookmarks/[id]/related`.
+- Topic map: `lib/topics.ts` clusters a category's vectors (k-means, k = clamp(sqrt(n/4), 3, 12)), names clusters with one model call, caches in Setting `topics_<slug>` keyed by membership hash. `GET /api/mindmap?category=slug` returns `mode: 'topics' | 'tweets'`; `&topic=i` returns a cluster's posts.
+- Scheduled sync: `lib/x-sync.ts` + `instrumentation.ts` (restores the timer on boot); Settings UI is `XSyncSection` in `app/settings/page.tsx`.
+- Re-categorize a category: `POST /api/categorize { category: slug, replaceCategories: true }` (button on the category page). Full pass: `{ force: true, replaceCategories: true }`.
 
 ## Conventions
 
