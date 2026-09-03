@@ -41,6 +41,9 @@ Each of those is understood, not just keyword-matched: authors, time ranges, med
 | Import method | Bookmarklet that sniffed network traffic while auto-scrolling; broke when X moved bookmarks to the new History page | **Direct import**: calls X's Bookmarks/Likes API with cursors from inside x.com, auto-discovers X's rotating query IDs, streams to sortX over postMessage |
 | Import data | Text, author, media | Also **long-form post text**, **quoted tweets**, like / repost / reply / view counts, language |
 | Sorting | Newest / oldest | Plus **most liked**, and filter by author |
+| Categories | 12 tech-leaning defaults; General was a dumping ground | 22 defaults incl. sports, watches & style, music, movies & TV, inspiration, culture & society, travel & food, art, gaming; General is a last resort; **Re-categorize** any category in one click |
+| Translation | — | Non-English posts translated to English (cached), searchable in English, toggle to original on the card |
+| Video | Link out to X | **Plays inline** on the card (proxy fallback), GIFs loop |
 | Pipeline | 4 stages | 5 stages — a final indexing stage keeps the search indexes in sync with new tags and categories |
 | Mobile | Fixed desktop sidebar | Responsive: top bar + slide-out drawer on phones and tablets |
 | Build | `next build` failed on `main` (two type errors) | Builds clean; CLI and tests cover the parser, ranking, and query understanding |
@@ -117,6 +120,10 @@ Import starts the pipeline automatically. Stages:
 5. **Index** — refresh keyword index and re-embed anything whose text, tags, or categories changed
 
 The pipeline is incremental. Interrupt it and it picks up where it stopped.
+
+## Translation and video
+
+Posts whose language isn't English are translated once (during the pipeline, or on demand from the card's **Translate** link) and cached. The translation is indexed for keyword and semantic search, so "free kick" finds the Spanish post too. Cards play X videos and GIFs inline; if the browser can't load X's CDN directly the player retries through sortX's media proxy.
 
 ## AI providers
 

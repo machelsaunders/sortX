@@ -12,5 +12,6 @@ Items consciously left out of the `sortx` branch. Revisit when needed.
 - **Docker model cache** — document/mount `/app/.cache` so the embedding model persists across rebuilds; consider baking it into the image.
 - **Upstream lint errors** — `react-hooks/set-state-in-effect` in `theme-toggle.tsx`, `command-palette.tsx`, `bookmarks/page.tsx`, `import/page.tsx` predate the fork; they do not block the build.
 - **End-to-end direct-import test on this Mac** — validated X fetch + parsing from a real session, and the receiver/API path with synthetic data; the browser-to-sortX postMessage hop could not be exercised here because the controllable Chrome was on another device.
+- **Related posts on cards** (vector neighbours), **cookie sync Settings panel**, **topic-map mindmap / category splitting**, **browser extension** — agreed roadmap order after categories, video, translation.
 - **Search analytics** — remember recent queries per browser for quick re-run.
 - **Contribute back** — the shared importer, engagement counts, and build fix are candidates for an upstream PR to viperrcrypto/Siftly.
